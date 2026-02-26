@@ -8,7 +8,7 @@
   var CONFIG = {
     model: 'claude-sonnet-4-20250514',
     maxTokens: 16000,
-    apiUrl: 'https://api.anthropic.com/v1/messages',
+    directApiUrl: 'https://api.anthropic.com/v1/messages',
     retryDelay: 2000,
     maxRetries: 1,
   };
@@ -333,19 +333,35 @@
     return { input_tokens: totalUsage.input_tokens, output_tokens: totalUsage.output_tokens };
   }
 
-  async function callClaude(apiKey, systemPrompt, userMessage, attempt) {
+  /**
+   * Call the Anthropic Messages API.
+   * @param {object} connConfig - { mode: 'proxy'|'direct', workerUrl?, apiKey? }
+   */
+  async function callClaude(connConfig, systemPrompt, userMessage, attempt) {
     if (!attempt) attempt = 0;
+
+    var useProxy = connConfig.mode === 'proxy';
+    var url = useProxy
+      ? connConfig.workerUrl.replace(/\/+$/, '') + '/v1/messages'
+      : CONFIG.directApiUrl;
+
+    var headers = {
+      'Content-Type': 'application/json',
+      'anthropic-version': '2023-06-01',
+    };
+
+    if (useProxy) {
+      // Proxy injects the API key server-side; no key needed here
+    } else {
+      headers['x-api-key'] = connConfig.apiKey;
+      headers['anthropic-dangerous-direct-browser-access'] = 'true';
+    }
 
     var response;
     try {
-      response = await fetch(CONFIG.apiUrl, {
+      response = await fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
+        headers: headers,
         body: JSON.stringify({
           model: CONFIG.model,
           max_tokens: CONFIG.maxTokens,
@@ -356,7 +372,7 @@
     } catch (err) {
       if (attempt < CONFIG.maxRetries) {
         await delay(CONFIG.retryDelay);
-        return callClaude(apiKey, systemPrompt, userMessage, attempt + 1);
+        return callClaude(connConfig, systemPrompt, userMessage, attempt + 1);
       }
       throw new Error('Network error: ' + err.message);
     }
@@ -368,7 +384,7 @@
 
       if ((response.status >= 500 || response.status === 429) && attempt < CONFIG.maxRetries) {
         await delay(CONFIG.retryDelay);
-        return callClaude(apiKey, systemPrompt, userMessage, attempt + 1);
+        return callClaude(connConfig, systemPrompt, userMessage, attempt + 1);
       }
       throw new Error(errMsg);
     }
@@ -411,13 +427,13 @@
     return [];
   }
 
-  async function runPhase1(apiKey, document, onAgentUpdate) {
+  async function runPhase1(connConfig, document, onAgentUpdate) {
     var promises = AGENT_CONFIGS.map(function (agent) {
       onAgentUpdate(agent.key, 'running', null);
       var startTime = Date.now();
 
       return callClaude(
-        apiKey,
+        connConfig,
         SHARED_PREAMBLE + '\n\n' + agent.prompt,
         'Here is the text to analyze:\n\n' + document
       ).then(function (result) {
@@ -447,7 +463,7 @@
     return Promise.all(promises);
   }
 
-  async function runPhase2(apiKey, document, phase1Results) {
+  async function runPhase2(connConfig, document, phase1Results) {
     var agentOutputs = phase1Results
       .filter(function (r) { return r.feedback.length > 0; })
       .map(function (r) {
@@ -467,11 +483,11 @@
       agentOutputs,
     ].join('\n');
 
-    var result = await callClaude(apiKey, AGGREGATOR_PROMPT, userMessage);
+    var result = await callClaude(connConfig, AGGREGATOR_PROMPT, userMessage);
     return parseJSON(result.text);
   }
 
-  async function runPhase3(apiKey, document, aggregated) {
+  async function runPhase3(connConfig, document, aggregated) {
     if (!aggregated || aggregated.length === 0) return [];
 
     var userMessage = [
@@ -484,7 +500,7 @@
       JSON.stringify(aggregated, null, 2),
     ].join('\n');
 
-    var result = await callClaude(apiKey, CRITIC_PROMPT, userMessage);
+    var result = await callClaude(connConfig, CRITIC_PROMPT, userMessage);
     return parseJSON(result.text);
   }
 

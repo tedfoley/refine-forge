@@ -16,6 +16,12 @@ const CATEGORY_META = {
 /* ─── App Component ────────────────────────────── */
 
 function App() {
+  const [connMode, setConnMode] = useState(
+    () => localStorage.getItem('forge-conn-mode') || 'proxy'
+  );
+  const [workerUrl, setWorkerUrl] = useState(
+    () => localStorage.getItem('forge-worker-url') || ''
+  );
   const [apiKey, setApiKey] = useState(
     () => localStorage.getItem('forge-api-key') || ''
   );
@@ -32,8 +38,25 @@ function App() {
   const [showExport, setShowExport] = useState(false);
 
   useEffect(() => {
+    localStorage.setItem('forge-conn-mode', connMode);
+  }, [connMode]);
+  useEffect(() => {
+    if (workerUrl) localStorage.setItem('forge-worker-url', workerUrl);
+  }, [workerUrl]);
+  useEffect(() => {
     if (apiKey) localStorage.setItem('forge-api-key', apiKey);
   }, [apiKey]);
+
+  const connConfig = useMemo(() => {
+    if (connMode === 'proxy') {
+      return { mode: 'proxy', workerUrl: workerUrl.trim() };
+    }
+    return { mode: 'direct', apiKey: apiKey.trim() };
+  }, [connMode, workerUrl, apiKey]);
+
+  const isConnReady = connMode === 'proxy'
+    ? workerUrl.trim().length > 0
+    : apiKey.trim().length > 0 && apiKey !== 'REPLACE_WITH_YOUR_KEY';
 
   useEffect(() => {
     if (view !== 'analyzing') return;
@@ -53,7 +76,7 @@ function App() {
   }, [view, phase]);
 
   const handleAnalyze = useCallback(async () => {
-    if (!inputText.trim() || !apiKey.trim()) return;
+    if (!inputText.trim() || !isConnReady) return;
 
     setView('analyzing');
     setError(null);
@@ -73,7 +96,7 @@ function App() {
       // Phase 1
       setPhase('phase1');
       const phase1Results = await ForgeAgents.runPhase1(
-        apiKey.trim(),
+        connConfig,
         inputText,
         (agentKey, status, detail) => {
           setAgentStatuses(prev => ({
@@ -90,14 +113,14 @@ function App() {
 
       const successCount = phase1Results.filter(r => r.status === 'fulfilled').length;
       if (successCount === 0) {
-        throw new Error('All specialist agents failed. Please check your API key and try again.');
+        throw new Error('All specialist agents failed. Please check your connection settings and try again.');
       }
 
       // Phase 2
       setPhase('phase2');
       let aggregated;
       try {
-        aggregated = await ForgeAgents.runPhase2(apiKey.trim(), inputText, phase1Results);
+        aggregated = await ForgeAgents.runPhase2(connConfig, inputText, phase1Results);
       } catch (err) {
         console.warn('Aggregator failed, using raw specialist output:', err);
         aggregated = [];
@@ -121,7 +144,7 @@ function App() {
       setPhase('phase3');
       let finalFeedback;
       try {
-        finalFeedback = await ForgeAgents.runPhase3(apiKey.trim(), inputText, aggregated);
+        finalFeedback = await ForgeAgents.runPhase3(connConfig, inputText, aggregated);
       } catch (err) {
         console.warn('Critic failed, using aggregated output:', err);
         finalFeedback = aggregated;
@@ -139,7 +162,7 @@ function App() {
       setView('input');
       setPhase(null);
     }
-  }, [inputText, apiKey]);
+  }, [inputText, connConfig, isConnReady]);
 
   const handleNewAnalysis = useCallback(() => {
     setView('input');
@@ -166,8 +189,13 @@ function App() {
           text={inputText}
           onTextChange={setInputText}
           onAnalyze={handleAnalyze}
+          connMode={connMode}
+          onConnModeChange={setConnMode}
+          workerUrl={workerUrl}
+          onWorkerUrlChange={setWorkerUrl}
           apiKey={apiKey}
           onApiKeyChange={setApiKey}
+          isConnReady={isConnReady}
         />
       )}
 
@@ -226,27 +254,61 @@ function Header({ showNewButton, onNewAnalysis }) {
 
 /* ─── Input View ───────────────────────────────── */
 
-function InputView({ text, onTextChange, onAnalyze, apiKey, onApiKeyChange }) {
-  const needsKey = !apiKey || apiKey === 'REPLACE_WITH_YOUR_KEY';
-  const canAnalyze = text.trim().length > 50 && !needsKey;
+function InputView({ text, onTextChange, onAnalyze, connMode, onConnModeChange, workerUrl, onWorkerUrlChange, apiKey, onApiKeyChange, isConnReady }) {
+  const canAnalyze = text.trim().length > 50 && isConnReady;
 
   return (
     <div className="input-view">
       <div style={{ marginBottom: 24 }}>
-        <div className="api-key-inner">
-          <label>Anthropic API Key</label>
-          <input
-            type="password"
-            value={apiKey}
-            onChange={e => onApiKeyChange(e.target.value)}
-            placeholder="sk-ant-..."
-            spellCheck={false}
-          />
+        <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+          <button
+            className={`filter-pill ${connMode === 'proxy' ? 'active' : ''}`}
+            onClick={() => onConnModeChange('proxy')}
+            style={{ fontSize: 13 }}
+          >Proxy (recommended)</button>
+          <button
+            className={`filter-pill ${connMode === 'direct' ? 'active' : ''}`}
+            onClick={() => onConnModeChange('direct')}
+            style={{ fontSize: 13 }}
+          >Direct API Key</button>
         </div>
-        {needsKey && (
-          <p style={{ fontSize: 13, color: '#DC2626', margin: '8px 0 0', lineHeight: 1.4 }}>
-            Enter your Anthropic API key to begin. Your key is stored only in your browser's localStorage and sent directly to the Anthropic API.
-          </p>
+
+        {connMode === 'proxy' ? (
+          <>
+            <div className="api-key-inner">
+              <label>Worker URL</label>
+              <input
+                type="text"
+                value={workerUrl}
+                onChange={e => onWorkerUrlChange(e.target.value)}
+                placeholder="https://forge-proxy.your-name.workers.dev"
+                spellCheck={false}
+              />
+            </div>
+            {!workerUrl.trim() && (
+              <p style={{ fontSize: 13, color: '#6B7280', margin: '8px 0 0', lineHeight: 1.5 }}>
+                Enter the URL of your Cloudflare Worker proxy. Your API key stays server-side and is never sent to the browser. See <code style={{ fontSize: 12, background: '#F3F4F6', padding: '1px 4px', borderRadius: 3 }}>worker.js</code> in the repo for setup instructions.
+              </p>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="api-key-inner">
+              <label>Anthropic API Key</label>
+              <input
+                type="password"
+                value={apiKey}
+                onChange={e => onApiKeyChange(e.target.value)}
+                placeholder="sk-ant-..."
+                spellCheck={false}
+              />
+            </div>
+            {!isConnReady && (
+              <p style={{ fontSize: 13, color: '#DC2626', margin: '8px 0 0', lineHeight: 1.4 }}>
+                Enter your Anthropic API key. It is stored only in your browser's localStorage and sent directly to the Anthropic API.
+              </p>
+            )}
+          </>
         )}
       </div>
 
