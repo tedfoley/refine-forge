@@ -4,6 +4,12 @@
 
 const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
+const MODEL_OPTIONS = [
+  { id: 'claude-sonnet-4-20250514', label: 'Sonnet 4', desc: 'Fast, cost-effective' },
+  { id: 'claude-opus-4-20250514', label: 'Opus 4', desc: 'Most capable, slower' },
+  { id: 'claude-haiku-4-20250506', label: 'Haiku 4', desc: 'Fastest, cheapest' },
+];
+
 const CATEGORY_META = {
   argument_logic: { label: 'Argument', color: '#2563EB', cls: 'argument_logic' },
   evidence:       { label: 'Evidence', color: '#D97706', cls: 'evidence' },
@@ -24,6 +30,9 @@ function App() {
   );
   const [apiKey, setApiKey] = useState(
     () => localStorage.getItem('forge-api-key') || ''
+  );
+  const [model, setModel] = useState(
+    () => localStorage.getItem('forge-model') || 'claude-sonnet-4-20250514'
   );
   const [view, setView] = useState('input');
   const [inputText, setInputText] = useState('');
@@ -46,6 +55,10 @@ function App() {
   useEffect(() => {
     if (apiKey) localStorage.setItem('forge-api-key', apiKey);
   }, [apiKey]);
+  useEffect(() => {
+    localStorage.setItem('forge-model', model);
+    ForgeAgents.CONFIG.model = model;
+  }, [model]);
 
   const connConfig = useMemo(() => {
     if (connMode === 'proxy') {
@@ -196,6 +209,8 @@ function App() {
           apiKey={apiKey}
           onApiKeyChange={setApiKey}
           isConnReady={isConnReady}
+          model={model}
+          onModelChange={setModel}
         />
       )}
 
@@ -254,13 +269,13 @@ function Header({ showNewButton, onNewAnalysis }) {
 
 /* ─── Input View ───────────────────────────────── */
 
-function InputView({ text, onTextChange, onAnalyze, connMode, onConnModeChange, workerUrl, onWorkerUrlChange, apiKey, onApiKeyChange, isConnReady }) {
+function InputView({ text, onTextChange, onAnalyze, connMode, onConnModeChange, workerUrl, onWorkerUrlChange, apiKey, onApiKeyChange, isConnReady, model, onModelChange }) {
   const canAnalyze = text.trim().length > 50 && isConnReady;
 
   return (
     <div className="input-view">
       <div style={{ marginBottom: 24 }}>
-        <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <button
             className={`filter-pill ${connMode === 'proxy' ? 'active' : ''}`}
             onClick={() => onConnModeChange('proxy')}
@@ -271,6 +286,23 @@ function InputView({ text, onTextChange, onAnalyze, connMode, onConnModeChange, 
             onClick={() => onConnModeChange('direct')}
             style={{ fontSize: 13 }}
           >Direct API Key</button>
+
+          <span style={{ width: 1, height: 20, background: '#E5E7EB', flexShrink: 0, margin: '0 4px' }} />
+
+          <label style={{ fontSize: 13, fontWeight: 600, color: '#6B7280' }}>Model:</label>
+          <select
+            value={model}
+            onChange={e => onModelChange(e.target.value)}
+            style={{
+              fontSize: 13, padding: '5px 10px', borderRadius: 6,
+              border: '1px solid rgba(0,0,0,0.1)', background: 'white',
+              fontFamily: "'DM Sans', sans-serif", cursor: 'pointer',
+            }}
+          >
+            {MODEL_OPTIONS.map(m => (
+              <option key={m.id} value={m.id}>{m.label} — {m.desc}</option>
+            ))}
+          </select>
         </div>
 
         {connMode === 'proxy' ? (
