@@ -20,7 +20,7 @@ function App() {
     () => localStorage.getItem('forge-conn-mode') || 'proxy'
   );
   const [workerUrl, setWorkerUrl] = useState(
-    () => localStorage.getItem('forge-worker-url') || ''
+    () => localStorage.getItem('forge-worker-url') || 'https://refine-forge-proxy.tedfoley7.workers.dev'
   );
   const [apiKey, setApiKey] = useState(
     () => localStorage.getItem('forge-api-key') || ''
