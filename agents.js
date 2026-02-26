@@ -6,7 +6,7 @@
   'use strict';
 
   var CONFIG = {
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6-20250627',
     maxTokens: 16000,
     directApiUrl: 'https://api.anthropic.com/v1/messages',
     retryDelay: 2000,
