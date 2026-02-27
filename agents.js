@@ -135,6 +135,15 @@ Outdated or Superseded Information:\n\
 \n\
 Set "category" to "evidence" for all your feedback items.\n\
 \n\
+CITATION REQUIREMENT:\n\
+Every feedback item you produce MUST include a "sources" field citing at least one specific, authoritative source that supports your critique. Acceptable sources include: peer-reviewed papers, government databases (BLS, Census, USGS, WHO, etc.), official institutional reports, established reference works, or high-quality journalism from known publications. Do NOT cite blogs, Wikipedia, social media, or low-authority sites.\n\
+\n\
+If you have web search access, USE IT to find the actual source. If you do not have web search access, cite the specific source the author SHOULD be referencing (e.g., "The author should cite the BLS Current Employment Statistics for this labor market claim") — include the source name, expected publication, and what to look for.\n\
+\n\
+If you cannot identify any authoritative source that would either support or contradict the author\'s claim, DO NOT include the feedback item. Unsourced evidence critiques are not useful.\n\
+\n\
+Source format: "sources": [{"url": "https://..." or "N/A — see recommendation", "title": "Source name", "finding": "What the source says and how it relates to the author\'s claim"}]\n\
+\n\
 DO NOT comment on: writing style, argument structure (another agent handles that), or prose clarity. Focus exclusively on whether claims are supported, whether evidence is accurate, and whether sources are credible.';
 
   var WEB_SEARCH_ADDENDUM_2 = 'WEB SEARCH CAPABILITIES:\n\
@@ -341,6 +350,11 @@ For each counterargument you raise:\n\
 \n\
 Set "category" to "counterargument" for all your feedback items.\n\
 \n\
+CITATION REQUIREMENT:\n\
+Whenever possible, ground your counterarguments in real, citable sources — published critiques, empirical studies, expert commentary, or established alternative frameworks. Include a "sources" field with authoritative references. Counterarguments backed by real evidence from named experts or institutions are far more valuable than hypothetical objections.\n\
+\n\
+If you have web search access, USE IT to find real opposing voices. If you do not, cite specific authors, papers, or institutions that represent the opposing view (e.g., "Economists in the Austrian school, such as [name], would argue..."). Vague counterarguments without any grounding ("some might argue...") are low value — prefer fewer, well-sourced objections over many unsourced ones.\n\
+\n\
 DO NOT generate fabricated counterarguments that no real expert would make. Every counterargument should be one that a knowledgeable person in the relevant domain would actually raise.';
 
   var WEB_SEARCH_ADDENDUM_6 = 'WEB SEARCH CAPABILITIES:\n\
@@ -502,6 +516,8 @@ FILTER CRITERIA — REMOVE items that are:\n\
 5. OUTSIDE THE AUTHOR\'S SCOPE: Suggestions to write a different piece than the one the author wrote. If the author is writing about X, don\'t keep feedback that says "you should also discuss Y" unless Y is clearly essential to the argument about X.\n\
 \n\
 6. DISPROPORTIONATE: Feedback whose severity is miscalibrated. A minor clarity issue marked "critical" should be downgraded or removed. A genuinely important finding marked "suggestion" should be upgraded.\n\
+\n\
+7. UNSOURCED EVIDENCE CLAIMS: Any feedback item with category "evidence" that does not include a "sources" field with at least one specific, authoritative citation should be REMOVED. Evidence critiques without sources are not actionable — the author has no way to verify or act on them. The only exception is if the feedback identifies a clear internal inconsistency within the document itself (contradictory numbers, self-contradicting claims) that requires no external source.\n\
 \n\
 PRESERVE items that are:\n\
 \n\
