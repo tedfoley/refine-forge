@@ -11,7 +11,7 @@
  *   6. Update WORKER_URL in agents.js with your worker URL
  *
  * The worker:
- *   - Only accepts POST to /v1/messages
+ *   - Only accepts POST to /v1/messages (or paths ending in /v1/messages)
  *   - Only allows requests from your GitHub Pages origin
  *   - Injects your API key server-side
  *   - Forwards to api.anthropic.com and returns the response
@@ -47,6 +47,24 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders(responseOrigin) });
     }
 
+    const url = new URL(request.url);
+    const pathname = url.pathname;
+
+    // Debug endpoint — GET /debug returns routing info
+    if (request.method === 'GET' && pathname === '/debug') {
+      return new Response(JSON.stringify({
+        pathname: pathname,
+        url: request.url,
+        method: request.method,
+        origin: origin,
+        isAllowed: isAllowed,
+        hasApiKey: !!env.ANTHROPIC_API_KEY,
+      }, null, 2), {
+        status: 200,
+        headers: { ...corsHeaders(responseOrigin), 'Content-Type': 'application/json' },
+      });
+    }
+
     // Only allow POST
     if (request.method !== 'POST') {
       return new Response(JSON.stringify({ error: 'Method not allowed' }), {
@@ -55,10 +73,10 @@ export default {
       });
     }
 
-    // Only allow /v1/messages
-    const url = new URL(request.url);
-    if (url.pathname !== '/v1/messages') {
-      return new Response(JSON.stringify({ error: 'Not found' }), {
+    // Allow /v1/messages or paths ending with /v1/messages
+    // (handles Workers deployed with route prefixes)
+    if (!pathname.endsWith('/v1/messages')) {
+      return new Response(JSON.stringify({ error: 'Not found', pathname: pathname }), {
         status: 404,
         headers: { ...corsHeaders(responseOrigin), 'Content-Type': 'application/json' },
       });
