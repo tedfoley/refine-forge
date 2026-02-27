@@ -7,9 +7,9 @@
 const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
 const MODEL_OPTIONS = [
-  { id: 'claude-sonnet-4-6-latest', label: 'Sonnet 4.6', desc: 'Fast, cost-effective' },
-  { id: 'claude-opus-4-6-latest', label: 'Opus 4.6', desc: 'Most capable, slower' },
-  { id: 'claude-haiku-4-5-latest', label: 'Haiku 4.5', desc: 'Fastest, cheapest' },
+  { id: 'claude-sonnet-4-20250514', label: 'Sonnet 4', desc: 'Fast, cost-effective' },
+  { id: 'claude-opus-4-20250514', label: 'Opus 4', desc: 'Most capable, slower' },
+  { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', desc: 'Fastest, cheapest' },
 ];
 
 const CATEGORY_META = {
@@ -48,7 +48,7 @@ function App() {
     () => localStorage.getItem('forge-api-key') || ''
   );
   const [model, setModel] = useState(
-    () => localStorage.getItem('forge-model') || 'claude-sonnet-4-6-latest'
+    () => localStorage.getItem('forge-model') || 'claude-sonnet-4-20250514'
   );
   const [view, setView] = useState('input');
   const [inputText, setInputText] = useState('');

@@ -31,7 +31,7 @@ function corsHeaders(origin) {
   return {
     'Access-Control-Allow-Origin': origin || ALLOWED_ORIGINS[0],
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, anthropic-version',
+    'Access-Control-Allow-Headers': 'Content-Type, anthropic-version, anthropic-beta',
     'Access-Control-Max-Age': '86400',
   };
 }
@@ -84,13 +84,21 @@ export default {
     try {
       const body = await request.text();
 
+      const forwardHeaders = {
+        'Content-Type': 'application/json',
+        'x-api-key': env.ANTHROPIC_API_KEY,
+        'anthropic-version': request.headers.get('anthropic-version') || '2023-06-01',
+      };
+
+      // Forward beta header if present (needed for web search tool)
+      const betaHeader = request.headers.get('anthropic-beta');
+      if (betaHeader) {
+        forwardHeaders['anthropic-beta'] = betaHeader;
+      }
+
       const anthropicResponse = await fetch(`${ANTHROPIC_API}/v1/messages`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': env.ANTHROPIC_API_KEY,
-          'anthropic-version': request.headers.get('anthropic-version') || '2023-06-01',
-        },
+        headers: forwardHeaders,
         body: body,
       });
 

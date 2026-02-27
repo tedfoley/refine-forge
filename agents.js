@@ -7,8 +7,8 @@
   'use strict';
 
   var CONFIG = {
-    model: 'claude-sonnet-4-6-latest',
-    grammarModel: 'claude-haiku-4-5-latest',
+    model: 'claude-sonnet-4-20250514',
+    grammarModel: 'claude-haiku-4-5-20251001',
     maxTokens: 16000,
     subAgentMaxTokens: 4000,
     directApiUrl: 'https://api.anthropic.com/v1/messages',
@@ -511,6 +511,14 @@
       'Content-Type': 'application/json',
       'anthropic-version': '2023-06-01',
     };
+
+    // Add beta header if request uses web search tool
+    var hasWebSearch = body.tools && body.tools.some(function (t) {
+      return t.type === 'web_search_20250305';
+    });
+    if (hasWebSearch) {
+      headers['anthropic-beta'] = 'web-search-2025-03-05';
+    }
 
     if (useProxy) {
       // Proxy injects the API key server-side
