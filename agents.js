@@ -429,9 +429,19 @@ Your job is to synthesize their feedback into a unified, non-redundant set of co
 INPUT:\n\
 You will receive the raw JSON output from each specialist agent, labeled by agent name.\n\
 \n\
+ABSOLUTE RULE — ONE ITEM PER PASSAGE:\n\
+The final output MUST NOT contain two or more feedback items that reference the same sentence, the same line, or overlapping passages in the document. If multiple agents flagged the same passage (even from completely different angles — e.g., one flags a clarity issue and another flags a logic issue on the same sentence), you MUST merge them into a SINGLE feedback item. The merged item should:\n\
+- Use the quote that best captures the shared passage\n\
+- Combine all perspectives into one comprehensive explanation (e.g., "This sentence has both a clarity problem and a logical gap: [clarity issue]. Additionally, [logic issue].")\n\
+- Pick the most relevant primary category, but note secondary categories in the explanation\n\
+- Use the highest applicable severity\n\
+- Combine all suggestions into one actionable recommendation\n\
+\n\
+To enforce this: after generating your output, scan for any two items whose quotes overlap or reference the same 1-2 sentences. If you find any, merge them before returning.\n\
+\n\
 YOUR TASKS:\n\
 \n\
-1. DEDUPLICATE: Multiple agents may flag the same passage or issue from different angles. When this happens, merge them into a single feedback item that incorporates the strongest points from each agent\'s version. Use the most precise quote, the clearest explanation, and the most actionable suggestion. Credit insights from multiple agents where relevant.\n\
+1. DEDUPLICATE AND MERGE BY PASSAGE: Group all input items by the passage they reference. Any items touching the same sentence or adjacent sentences about the same topic MUST become one item. This is your most important task.\n\
 \n\
 2. CROSS-AGENT EVIDENCE SYNTHESIS:\n\
 Pay special attention to cases where multiple agents have found RELATED information about the same underlying issue from different angles. These are your highest-value merges:\n\
@@ -457,16 +467,16 @@ Return a JSON array of objects, each with:\n\
   "id": sequential integer starting at 1,\n\
   "quote": "exact verbatim text from the original document",\n\
   "title": "Concise descriptive title",\n\
-  "category": "the most relevant category from the original agents",\n\
+  "category": "the PRIMARY category — pick the most relevant from: argument_logic | evidence | clarity | structure | counterargument | math_empirical",\n\
   "severity": "critical | important | suggestion",\n\
-  "explanation": "Merged explanation incorporating insights from all relevant agents",\n\
-  "suggestion": "Specific, actionable recommendation",\n\
+  "explanation": "Merged explanation incorporating insights from ALL agents that flagged this passage. If multiple categories apply, address each perspective.",\n\
+  "suggestion": "Specific, actionable recommendation that addresses all identified issues in this passage",\n\
   "sources": [{"url": "...", "title": "...", "finding": "..."}]  // only if sources exist\n\
 }\n\
 \n\
 Order the output by severity (critical first, then important, then suggestion), with items of equal severity ordered by their position in the document.\n\
 \n\
-Quality target: The final set should typically be 30-50% smaller than the combined input (due to merging and deduplication), but every surviving item should be substantive and non-redundant. Aim for 8-20 final items depending on document length and quality.\n\
+Quality target: The final set should typically be 30-50% smaller than the combined input (due to merging and deduplication), but every surviving item should be substantive and non-redundant. Aim for 8-20 final items depending on document length and quality. NEVER output two items about the same passage.\n\
 \n\
 Return ONLY the JSON array.';
 
@@ -487,7 +497,7 @@ FILTER CRITERIA — REMOVE items that are:\n\
 \n\
 3. WRONG: Verify each feedback item against the original text. Does the quoted passage actually exist? Does the feedback accurately describe the issue? Sometimes agents misread or misinterpret passages — catch those errors.\n\
 \n\
-4. REDUNDANT: Even after aggregation, some items may make essentially the same point. Keep only the strongest version.\n\
+4. REDUNDANT OR OVERLAPPING: Even after aggregation, some items may make essentially the same point or reference the same passage. If two items quote the same sentence or overlapping text, MERGE them into one item combining both perspectives — do NOT keep both. The final output must have at most one item per passage.\n\
 \n\
 5. OUTSIDE THE AUTHOR\'S SCOPE: Suggestions to write a different piece than the one the author wrote. If the author is writing about X, don\'t keep feedback that says "you should also discuss Y" unless Y is clearly essential to the argument about X.\n\
 \n\
