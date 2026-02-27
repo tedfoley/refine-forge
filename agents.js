@@ -17,6 +17,8 @@
     maxSubAgents: 3,
     subAgentTimeout: 60000,
     toolAgentTimeout: 180000,
+    agentBatchSize: 2,
+    agentBatchDelay: 15000,
   };
 
   var SHARED_PREAMBLE = [
@@ -729,16 +731,12 @@
   async function runPhase1(connConfig, document, onAgentUpdate, analysisOptions) {
     if (!analysisOptions) analysisOptions = {};
 
-    var promises = AGENT_CONFIGS.map(function (agent) {
-      onAgentUpdate(agent.key, 'running', null);
-      var startTime = Date.now();
-
-      // Build tools list for this agent
+    // Build agent tasks (but don't start them yet)
+    function buildAgentTask(agent) {
       var tools = [];
       var useWebSearch = false;
       var useSubAgents = false;
 
-      // Web search: evidence and steelman always get it if enabled; math opt-in
       if (analysisOptions.webSearch) {
         if (agent.webSearch) useWebSearch = true;
         if (agent.key === 'math' && analysisOptions.mathWebSearch) useWebSearch = true;
@@ -746,8 +744,6 @@
       if (analysisOptions.mathWebSearch && agent.key === 'math') {
         useWebSearch = true;
       }
-
-      // Sub-agents: only if deep research is enabled
       if (analysisOptions.deepResearch && agent.subAgents) {
         useSubAgents = true;
       }
@@ -755,38 +751,44 @@
       if (useWebSearch) tools.push(WEB_SEARCH_TOOL);
       if (useSubAgents) tools.push(SUBAGENT_TOOL);
 
-      // Build system prompt
       var systemPrompt = SHARED_PREAMBLE + '\n\n' + agent.prompt;
       if (useWebSearch) {
         systemPrompt += WEB_SEARCH_PREAMBLE;
       }
 
+      return { agent: agent, tools: tools, systemPrompt: systemPrompt, useWebSearch: useWebSearch, useSubAgents: useSubAgents };
+    }
+
+    function runSingleAgent(task) {
+      var agent = task.agent;
+      var tools = task.tools;
+      var systemPrompt = task.systemPrompt;
+      var useWebSearch = task.useWebSearch;
+      var useSubAgents = task.useSubAgents;
+
+      onAgentUpdate(agent.key, 'running', null);
+      var startTime = Date.now();
+
       var agentPromise;
       if (tools.length > 0) {
-        // Use tool-enabled path
         var statusLabel = [];
         if (useWebSearch) statusLabel.push('web search');
         if (useSubAgents) statusLabel.push('sub-agents');
         onAgentUpdate(agent.key, 'running', { tools: statusLabel });
 
         agentPromise = runAgentWithTools(
-          connConfig,
-          systemPrompt,
+          connConfig, systemPrompt,
           'Here is the text to analyze:\n\n' + document,
-          tools,
-          agent.name,
+          tools, agent.name,
           function (type, detail) {
             if (type === 'sub-agent') {
               onAgentUpdate(agent.key, 'running', {
                 subAgent: detail.objective.substring(0, 60),
-                subAgentCount: detail.count,
-                tools: statusLabel,
+                subAgentCount: detail.count, tools: statusLabel,
               });
             } else if (type === 'sub-agent-done') {
               onAgentUpdate(agent.key, 'running', {
-                subAgentCount: detail.count,
-                subAgentDone: true,
-                tools: statusLabel,
+                subAgentCount: detail.count, subAgentDone: true, tools: statusLabel,
               });
             }
           }
@@ -794,89 +796,72 @@
           var feedback = parseJSON(text);
           var elapsed = Math.round((Date.now() - startTime) / 1000);
           onAgentUpdate(agent.key, 'complete', { items: feedback.length, elapsed: elapsed });
-          return {
-            key: agent.key,
-            name: agent.name,
-            status: 'fulfilled',
-            feedback: feedback,
-            error: null,
-          };
+          return { key: agent.key, name: agent.name, status: 'fulfilled', feedback: feedback, error: null };
         });
       } else {
-        // Simple path — no tools
         agentPromise = callClaude(
-          connConfig,
-          systemPrompt,
+          connConfig, systemPrompt,
           'Here is the text to analyze:\n\n' + document
         ).then(function (result) {
           var feedback = parseJSON(result.text);
           var elapsed = Math.round((Date.now() - startTime) / 1000);
           onAgentUpdate(agent.key, 'complete', { items: feedback.length, elapsed: elapsed });
-          return {
-            key: agent.key,
-            name: agent.name,
-            status: 'fulfilled',
-            feedback: feedback,
-            error: null,
-          };
+          return { key: agent.key, name: agent.name, status: 'fulfilled', feedback: feedback, error: null };
         });
       }
 
       return agentPromise.catch(function (err) {
         var elapsed = Math.round((Date.now() - startTime) / 1000);
         onAgentUpdate(agent.key, 'error', { error: err.message, elapsed: elapsed });
-        return {
-          key: agent.key,
-          name: agent.name,
-          status: 'rejected',
-          feedback: [],
-          error: err.message,
-        };
+        return { key: agent.key, name: agent.name, status: 'rejected', feedback: [], error: err.message };
       });
-    });
-
-    // Grammar agent (optional, runs in parallel but independent)
-    if (analysisOptions.grammar) {
-      var grammarPromise = (function () {
-        onAgentUpdate('grammar', 'running', null);
-        var startTime = Date.now();
-
-        return callClaudeRaw(connConfig, {
-          model: CONFIG.grammarModel,
-          max_tokens: CONFIG.maxTokens,
-          system: GRAMMAR_AGENT_CONFIG.prompt,
-          messages: [{ role: 'user', content: 'Here is the text to check for grammar, spelling, and punctuation errors:\n\n' + document }],
-        }).then(function (data) {
-          var text = extractTextFromResponse(data);
-          var feedback = parseJSON(text);
-          var elapsed = Math.round((Date.now() - startTime) / 1000);
-          onAgentUpdate('grammar', 'complete', { items: feedback.length, elapsed: elapsed });
-          return {
-            key: 'grammar',
-            name: 'Grammar & Mechanics',
-            status: 'fulfilled',
-            feedback: feedback,
-            error: null,
-            isGrammar: true,
-          };
-        }).catch(function (err) {
-          var elapsed = Math.round((Date.now() - startTime) / 1000);
-          onAgentUpdate('grammar', 'error', { error: err.message, elapsed: elapsed });
-          return {
-            key: 'grammar',
-            name: 'Grammar & Mechanics',
-            status: 'rejected',
-            feedback: [],
-            error: err.message,
-            isGrammar: true,
-          };
-        });
-      })();
-
-      promises.push(grammarPromise);
     }
 
-    return Promise.all(promises);
+    // Launch agents in staggered batches of 2 to avoid rate limits
+    var tasks = AGENT_CONFIGS.map(buildAgentTask);
+    var batchSize = CONFIG.agentBatchSize;
+    var batchDelay = CONFIG.agentBatchDelay;
+    var allResults = [];
+
+    for (var i = 0; i < tasks.length; i += batchSize) {
+      var batch = tasks.slice(i, i + batchSize);
+      var batchPromises = batch.map(runSingleAgent);
+      var batchResults = await Promise.all(batchPromises);
+      allResults = allResults.concat(batchResults);
+
+      // Delay before next batch (skip delay after last batch)
+      if (i + batchSize < tasks.length) {
+        await delay(batchDelay);
+      }
+    }
+
+    // Grammar agent (optional, runs after specialists to avoid rate limit)
+    if (analysisOptions.grammar) {
+      await delay(batchDelay);
+      onAgentUpdate('grammar', 'running', null);
+      var grammarStart = Date.now();
+
+      var grammarResult = await callClaudeRaw(connConfig, {
+        model: CONFIG.grammarModel,
+        max_tokens: CONFIG.maxTokens,
+        system: GRAMMAR_AGENT_CONFIG.prompt,
+        messages: [{ role: 'user', content: 'Here is the text to check for grammar, spelling, and punctuation errors:\n\n' + document }],
+      }).then(function (data) {
+        var text = extractTextFromResponse(data);
+        var feedback = parseJSON(text);
+        var elapsed = Math.round((Date.now() - grammarStart) / 1000);
+        onAgentUpdate('grammar', 'complete', { items: feedback.length, elapsed: elapsed });
+        return { key: 'grammar', name: 'Grammar & Mechanics', status: 'fulfilled', feedback: feedback, error: null, isGrammar: true };
+      }).catch(function (err) {
+        var elapsed = Math.round((Date.now() - grammarStart) / 1000);
+        onAgentUpdate('grammar', 'error', { error: err.message, elapsed: elapsed });
+        return { key: 'grammar', name: 'Grammar & Mechanics', status: 'rejected', feedback: [], error: err.message, isGrammar: true };
+      });
+
+      allResults.push(grammarResult);
+    }
+
+    return allResults;
   }
 
   async function runPhase2(connConfig, document, phase1Results) {
