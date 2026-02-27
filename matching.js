@@ -1,6 +1,7 @@
 /**
  * Forge — Fuzzy Quote Matching Utilities
  * Finds feedback quote anchors in the original document text.
+ * v2: Document position computation, grammar highlights, resolved dimming
  */
 (function () {
   'use strict';
@@ -120,7 +121,27 @@
     return null;
   }
 
-  function injectHighlights(container, feedbackItems, onClickFn) {
+  /**
+   * Compute document positions for feedback items based on their quote matches.
+   * Returns a map of { feedbackId: charOffset }.
+   */
+  function computeDocumentPositions(plainText, feedbackItems) {
+    var positions = {};
+    if (!plainText || !feedbackItems) return positions;
+
+    feedbackItems.forEach(function (item) {
+      var match = findBestMatch(item.quote, plainText);
+      if (match) {
+        positions[item.id] = match.start;
+      } else {
+        positions[item.id] = Infinity;
+      }
+    });
+
+    return positions;
+  }
+
+  function injectHighlights(container, feedbackItems, onClickFn, resolutions) {
     if (!container || !feedbackItems || feedbackItems.length === 0) return;
 
     var walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
@@ -149,14 +170,16 @@
     for (var i = itemsWithPos.length - 1; i >= 0; i--) {
       var entry = itemsWithPos[i];
       try {
-        wrapMatch(nodeMap, fullText, entry.match, entry.item.id, onClickFn);
+        var isGrammar = entry.item.category === 'grammar';
+        var resolution = resolutions && resolutions[entry.item.id];
+        wrapMatch(nodeMap, fullText, entry.match, entry.item.id, onClickFn, isGrammar, resolution);
       } catch (e) {
         // Silently skip failed highlights
       }
     }
   }
 
-  function wrapMatch(nodeMap, fullText, match, id, onClick) {
+  function wrapMatch(nodeMap, fullText, match, id, onClick, isGrammar, resolution) {
     var startNodeInfo = null;
     var endNodeInfo = null;
 
@@ -188,7 +211,10 @@
     }
 
     var mark = document.createElement('mark');
-    mark.className = 'highlight-anchor';
+    var classes = ['highlight-anchor'];
+    if (isGrammar) classes.push('highlight-grammar');
+    if (resolution === 'accepted' || resolution === 'dismissed') classes.push('highlight-resolved');
+    mark.className = classes.join(' ');
     mark.id = 'text-anchor-' + id;
     mark.setAttribute('data-feedback-id', String(id));
     mark.addEventListener('click', function () { onClick(id); });
@@ -197,6 +223,7 @@
 
     var badge = document.createElement('sup');
     badge.className = 'highlight-badge';
+    if (isGrammar) badge.classList.add('highlight-badge-grammar');
     badge.textContent = String(id);
     mark.appendChild(badge);
   }
@@ -204,5 +231,6 @@
   window.ForgeMatching = {
     findBestMatch: findBestMatch,
     injectHighlights: injectHighlights,
+    computeDocumentPositions: computeDocumentPositions,
   };
 })();

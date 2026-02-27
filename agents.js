@@ -1,16 +1,22 @@
 /**
  * Forge — Agent Prompts & API Logic
  * Multi-agent pipeline for deep writing analysis.
+ * v2: Web search, sub-agents, grammar agent, cross-agent synthesis
  */
 (function () {
   'use strict';
 
   var CONFIG = {
     model: 'claude-sonnet-4-6-latest',
+    grammarModel: 'claude-haiku-4-5-latest',
     maxTokens: 16000,
+    subAgentMaxTokens: 4000,
     directApiUrl: 'https://api.anthropic.com/v1/messages',
     retryDelay: 2000,
     maxRetries: 1,
+    maxSubAgents: 3,
+    subAgentTimeout: 60000,
+    toolAgentTimeout: 180000,
   };
 
   var SHARED_PREAMBLE = [
@@ -49,11 +55,33 @@
     'Return ONLY the JSON array, no other text.',
   ].join('\n');
 
+  var WEB_SEARCH_PREAMBLE = [
+    '',
+    'WEB SEARCH CAPABILITIES:',
+    'You have access to a web search tool. Use it when you encounter:',
+    '- Specific empirical claims that can be verified against current data',
+    '- References to studies, reports, or datasets you can look up',
+    '- Statistics or numbers whose accuracy you can check',
+    '- Claims about current state of affairs that may have changed',
+    '',
+    'SEARCH STRATEGY:',
+    '- Start with short, broad queries (1-4 words), then narrow if needed',
+    '- Do NOT search for every claim \u2014 only search when verification would materially affect your feedback',
+    '- Aim for 2-5 searches per analysis, focused on the most important or dubious claims',
+    '- When you find relevant results, incorporate them into your feedback: cite the source URL and explain how it supports or contradicts the author\'s claim',
+    '- If a search doesn\'t return useful results, move on \u2014 don\'t waste searches on increasingly specific queries',
+    '',
+    'When citing web search findings in your feedback, add a "sources" field to the JSON object for that item:',
+    '"sources": [{"url": "https://...", "title": "Source title", "finding": "Brief summary of what you found"}]',
+  ].join('\n');
+
   var AGENT_CONFIGS = [
     {
       key: 'argument',
       name: 'Argument Structure',
       icon: '\uD83D\uDD0D',
+      webSearch: false,
+      subAgents: false,
       prompt: [
         'YOUR SPECIALIST ROLE: Argument Structure & Internal Consistency',
         '',
@@ -86,6 +114,8 @@
       key: 'evidence',
       name: 'Evidence & Claims',
       icon: '\uD83D\uDCCB',
+      webSearch: true,
+      subAgents: true,
       prompt: [
         'YOUR SPECIALIST ROLE: Evidence Quality & Citation Accuracy',
         '',
@@ -103,6 +133,11 @@
         '- Selection bias in examples (e.g., only citing cases that support the thesis)',
         '- Claims about consensus that may overstate or understate agreement',
         '- References to studies/data without enough context for the reader to evaluate',
+        '- When you encounter a specific empirical claim with a citation, USE WEB SEARCH to verify:',
+        '  (a) that the cited source exists, (b) that it says what the author claims it says,',
+        '  (c) whether more recent data supersedes it',
+        '- When you encounter a quantitative claim without citation, USE WEB SEARCH to find',
+        '  the actual current data and compare it to the author\'s claim',
         '',
         'DO NOT flag:',
         '- Well-known facts that don\'t need citation (e.g., "the sky is blue")',
@@ -117,6 +152,8 @@
       key: 'clarity',
       name: 'Clarity & Exposition',
       icon: '\u270D\uFE0F',
+      webSearch: false,
+      subAgents: false,
       prompt: [
         'YOUR SPECIALIST ROLE: Clarity & Readability for Non-Specialist Audiences',
         '',
@@ -150,6 +187,8 @@
       key: 'math',
       name: 'Math & Empirical',
       icon: '\uD83E\uDDEE',
+      webSearch: false, // opt-in via analysisOptions.mathWebSearch
+      subAgents: false,
       prompt: [
         'YOUR SPECIALIST ROLE: Mathematical, Statistical & Quantitative Verification',
         '',
@@ -187,6 +226,8 @@
       key: 'structure',
       name: 'Structural Coherence',
       icon: '\uD83C\uDFD7\uFE0F',
+      webSearch: false,
+      subAgents: false,
       prompt: [
         'YOUR SPECIALIST ROLE: Document Structure & Flow',
         '',
@@ -219,6 +260,8 @@
       key: 'steelman',
       name: 'Steelman & Counter',
       icon: '\u2694\uFE0F',
+      webSearch: true,
+      subAgents: true,
       prompt: [
         'YOUR SPECIALIST ROLE: Devil\'s Advocate & Counterargument Generator',
         '',
@@ -250,8 +293,83 @@
     },
   ];
 
+  var GRAMMAR_AGENT_CONFIG = {
+    key: 'grammar',
+    name: 'Grammar & Mechanics',
+    icon: '\u270D\uFE0F',
+    prompt: [
+      'You are a meticulous copy editor focused on grammar, spelling, punctuation, and',
+      'mechanical correctness. You are NOT a content reviewer \u2014 leave argument quality,',
+      'evidence, structure, and clarity to other reviewers. Your sole focus is mechanical',
+      'correctness of the writing.',
+      '',
+      'SPECIFICALLY LOOK FOR:',
+      '- Grammatical errors (subject-verb agreement, tense consistency, pronoun reference)',
+      '- Spelling errors and typos',
+      '- Punctuation errors (comma splices, missing commas, incorrect semicolon use)',
+      '- Run-on sentences and sentence fragments',
+      '- Inconsistent formatting (e.g., inconsistent capitalization of terms, inconsistent',
+      '  use of Oxford comma)',
+      '- Incorrect word usage (e.g., affect/effect, its/it\'s, their/there/they\'re)',
+      '- Awkward phrasing that could be cleaned up mechanically (not content rewrites)',
+      '',
+      'DO NOT flag:',
+      '- Content issues of any kind (argument quality, evidence, structure)',
+      '- Stylistic choices that are grammatically correct (e.g., starting sentences with "And")',
+      '- Intentional informal tone in blog-style writing',
+      '- Technical terminology usage',
+      '- Anything that requires understanding the argument to evaluate',
+      '',
+      'For each issue, provide:',
+      '- The exact quote containing the error',
+      '- What the specific error is',
+      '- The corrected version',
+      '',
+      'OUTPUT FORMAT:',
+      'Return a JSON array of objects, each with:',
+      '{',
+      '  "quote": "exact text passage containing the error",',
+      '  "title": "Short title (e.g., \'Subject-verb disagreement\', \'Missing comma\')",',
+      '  "category": "grammar",',
+      '  "severity": "suggestion",',
+      '  "explanation": "What the error is (1 sentence)",',
+      '  "suggestion": "Corrected text: [corrected version of the passage]"',
+      '}',
+      '',
+      'Return ONLY the JSON array, no other text.',
+      '',
+      'Quality bar: only flag clear errors, not debatable style choices. If you\'re unsure',
+      'whether something is an error, skip it.',
+    ].join('\n'),
+  };
+
+  var SUBAGENT_TOOL = {
+    name: 'research_subagent',
+    description: 'Spawn a focused research sub-agent to investigate a specific claim, find evidence, or explore a question in depth. The sub-agent has web search access and will return a detailed research report. Use this for claims that require deep verification beyond a simple web search \u2014 e.g., when you need to cross-reference multiple sources, trace a claim back to its original study, or build a comprehensive picture of the evidence landscape on a specific point. Do NOT use for simple factual lookups (use web_search directly for those). Limit to 3 sub-agents per analysis.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        objective: {
+          type: 'string',
+          description: 'A detailed description of what the sub-agent should research. Be specific: include the exact claim to verify, the context from the document, what kind of evidence to look for, and what format to return results in. Vague objectives produce poor results.',
+        },
+        return_format: {
+          type: 'string',
+          description: 'What the sub-agent should return. E.g., "A summary of the current evidence for and against this claim, with source URLs" or "The actual current statistic from the most authoritative source, with citation"',
+        },
+      },
+      required: ['objective', 'return_format'],
+    },
+  };
+
+  var WEB_SEARCH_TOOL = {
+    type: 'web_search_20250305',
+    name: 'web_search',
+    max_uses: 5,
+  };
+
   var AGGREGATOR_PROMPT = [
-    'You are the Aggregation Agent. You receive the output from 6 specialist',
+    'You are the Aggregation Agent. You receive the output from specialist',
     'analysis agents who have each examined a piece of writing through a different',
     'lens. Your job is to merge, deduplicate, and structure their feedback into',
     'a single coherent list.',
@@ -276,6 +394,28 @@
     '   - "agents": array of which specialist agents flagged this',
     '5. Order by severity (critical first), then by position in the document.',
     '6. If two items conflict, keep both but note the disagreement.',
+    '',
+    'CROSS-AGENT EVIDENCE SYNTHESIS:',
+    'When merging feedback, pay special attention to cases where multiple agents have',
+    'found related information about the same underlying issue from different angles.',
+    'For example:',
+    '- If the Evidence Auditor found that a cited statistic is outdated AND the',
+    '  Steelman Agent found a more recent study with different conclusions, MERGE',
+    '  these into a single powerful feedback item that presents both the "this is',
+    '  outdated" finding and the "here\'s what current evidence says" finding together.',
+    '- If the Math Verifier found a calculation error AND the Argument Logic Analyst',
+    '  found that the conclusion based on that calculation is a non-sequitur, MERGE',
+    '  these into one item showing the cascading impact.',
+    '- When merging items with web search sources, consolidate all source URLs into',
+    '  the combined item\'s "sources" array.',
+    '',
+    'The goal is to produce feedback items that tell a complete story about an issue,',
+    'drawing on every agent\'s perspective, rather than fragmenting related findings',
+    'into separate items the author has to mentally connect.',
+    '',
+    'If any input feedback items contain a "sources" field (an array of objects with',
+    'url, title, and finding), preserve these in the merged output. When merging items,',
+    'concatenate their sources arrays and deduplicate by URL.',
     '',
     'OUTPUT: A JSON array of merged, deduplicated, structured feedback items.',
     'Return ONLY the JSON array.',
@@ -310,6 +450,8 @@
     'KEEP AS-IS if:',
     '- The comment is specific, accurate, well-calibrated, and actionable',
     '',
+    'If any items contain a "sources" field with web search citations, preserve it.',
+    '',
     'OUTPUT: The filtered and refined JSON array. Include ONLY items that survive',
     'the filter. Each item should have the same schema as the input.',
     'Renumber the "id" fields sequentially from 1.',
@@ -324,20 +466,40 @@
   ].join('\n');
 
   var totalUsage = { input_tokens: 0, output_tokens: 0 };
+  var webSearchCount = 0;
+  var subAgentCount = 0;
 
   function resetUsage() {
     totalUsage = { input_tokens: 0, output_tokens: 0 };
+    webSearchCount = 0;
+    subAgentCount = 0;
   }
 
   function getUsage() {
-    return { input_tokens: totalUsage.input_tokens, output_tokens: totalUsage.output_tokens };
+    return {
+      input_tokens: totalUsage.input_tokens,
+      output_tokens: totalUsage.output_tokens,
+      webSearches: webSearchCount,
+      subAgents: subAgentCount,
+    };
   }
 
   /**
-   * Call the Anthropic Messages API.
-   * @param {object} connConfig - { mode: 'proxy'|'direct', workerUrl?, apiKey? }
+   * Extract text from a potentially multi-block API response.
+   * Handles web search and tool-use responses that have multiple content blocks.
    */
-  async function callClaude(connConfig, systemPrompt, userMessage, attempt) {
+  function extractTextFromResponse(data) {
+    if (!data || !data.content) return '';
+    return data.content
+      .filter(function (block) { return block.type === 'text'; })
+      .map(function (block) { return block.text; })
+      .join('\n');
+  }
+
+  /**
+   * Raw API call — returns full response data (for tool-use loops).
+   */
+  async function callClaudeRaw(connConfig, body, attempt) {
     if (!attempt) attempt = 0;
 
     var useProxy = connConfig.mode === 'proxy';
@@ -351,7 +513,7 @@
     };
 
     if (useProxy) {
-      // Proxy injects the API key server-side; no key needed here
+      // Proxy injects the API key server-side
     } else {
       headers['x-api-key'] = connConfig.apiKey;
       headers['anthropic-dangerous-direct-browser-access'] = 'true';
@@ -362,17 +524,12 @@
       response = await fetch(url, {
         method: 'POST',
         headers: headers,
-        body: JSON.stringify({
-          model: CONFIG.model,
-          max_tokens: CONFIG.maxTokens,
-          system: systemPrompt,
-          messages: [{ role: 'user', content: userMessage }],
-        }),
+        body: JSON.stringify(body),
       });
     } catch (err) {
       if (attempt < CONFIG.maxRetries) {
         await delay(CONFIG.retryDelay);
-        return callClaude(connConfig, systemPrompt, userMessage, attempt + 1);
+        return callClaudeRaw(connConfig, body, attempt + 1);
       }
       throw new Error('Network error: ' + err.message);
     }
@@ -384,19 +541,149 @@
 
       if ((response.status >= 500 || response.status === 429) && attempt < CONFIG.maxRetries) {
         await delay(CONFIG.retryDelay);
-        return callClaude(connConfig, systemPrompt, userMessage, attempt + 1);
+        return callClaudeRaw(connConfig, body, attempt + 1);
       }
       throw new Error(errMsg);
     }
 
     var data = await response.json();
-    var text = data.content && data.content[0] && data.content[0].text || '';
     var usage = data.usage || { input_tokens: 0, output_tokens: 0 };
-
     totalUsage.input_tokens += usage.input_tokens;
     totalUsage.output_tokens += usage.output_tokens;
 
-    return { text: text, usage: usage };
+    return data;
+  }
+
+  /**
+   * Simple API call — returns text string (for non-tool-use calls).
+   */
+  async function callClaude(connConfig, systemPrompt, userMessage, attempt) {
+    var data = await callClaudeRaw(connConfig, {
+      model: CONFIG.model,
+      max_tokens: CONFIG.maxTokens,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userMessage }],
+    }, attempt);
+
+    return { text: extractTextFromResponse(data), usage: data.usage };
+  }
+
+  /**
+   * Handle a sub-agent tool call — spawns a research sub-agent with web search.
+   */
+  async function handleSubAgentTool(connConfig, toolInput, parentAgentName) {
+    var systemPrompt = [
+      'You are a focused research sub-agent spawned by the ' + parentAgentName + ' specialist.',
+      'Your task is to research a specific question and return a concise, evidence-based report.',
+      '',
+      'INSTRUCTIONS:',
+      '1. Use web search to find relevant, authoritative sources',
+      '2. Cross-reference multiple sources when possible',
+      '3. Be specific about what you found and what the evidence says',
+      '4. Include source URLs for all claims',
+      '5. Keep your report focused and concise (under 500 words)',
+      '6. If you can\'t find reliable information, say so \u2014 don\'t speculate',
+      '',
+      'OBJECTIVE: ' + toolInput.objective,
+      '',
+      'RETURN FORMAT: ' + toolInput.return_format,
+    ].join('\n');
+
+    var data = await callClaudeRaw(connConfig, {
+      model: CONFIG.model,
+      max_tokens: CONFIG.subAgentMaxTokens,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: 'Execute the research task described in your instructions. Return your findings as plain text.' }],
+      tools: [WEB_SEARCH_TOOL],
+    });
+
+    subAgentCount++;
+    return extractTextFromResponse(data);
+  }
+
+  /**
+   * Run an agent with tool-use loop (web search + sub-agents).
+   */
+  async function runAgentWithTools(connConfig, systemPrompt, userMessage, tools, agentName, onStatus) {
+    var messages = [{ role: 'user', content: userMessage }];
+    var agentSubAgentCount = 0;
+
+    while (true) {
+      var data = await callClaudeRaw(connConfig, {
+        model: CONFIG.model,
+        max_tokens: CONFIG.maxTokens,
+        system: systemPrompt,
+        messages: messages,
+        tools: tools,
+      });
+
+      // Count web searches from response
+      if (data.content) {
+        data.content.forEach(function (block) {
+          if (block.type === 'server_tool_use' && block.name === 'web_search') {
+            webSearchCount++;
+          }
+        });
+      }
+
+      var toolUseBlocks = (data.content || []).filter(function (b) {
+        return b.type === 'tool_use';
+      });
+
+      if (toolUseBlocks.length === 0 || data.stop_reason === 'end_turn') {
+        return extractTextFromResponse(data);
+      }
+
+      // Process tool calls
+      var toolResults = [];
+      for (var i = 0; i < toolUseBlocks.length; i++) {
+        var toolUse = toolUseBlocks[i];
+        if (toolUse.name === 'research_subagent' && agentSubAgentCount < CONFIG.maxSubAgents) {
+          agentSubAgentCount++;
+          if (onStatus) {
+            onStatus('sub-agent', {
+              count: agentSubAgentCount,
+              objective: toolUse.input.objective,
+            });
+          }
+
+          try {
+            var result = await handleSubAgentTool(connConfig, toolUse.input, agentName);
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: toolUse.id,
+              content: result,
+            });
+          } catch (err) {
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: toolUse.id,
+              content: 'Sub-agent failed: ' + err.message + '. Please complete your analysis with the information already gathered.',
+              is_error: true,
+            });
+          }
+
+          if (onStatus) {
+            onStatus('sub-agent-done', { count: agentSubAgentCount });
+          }
+        } else if (toolUse.name === 'research_subagent') {
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: 'Sub-agent limit reached (max ' + CONFIG.maxSubAgents + '). Please complete your analysis with the information already gathered.',
+            is_error: true,
+          });
+        }
+      }
+
+      if (toolResults.length > 0) {
+        messages.push({ role: 'assistant', content: data.content });
+        messages.push({ role: 'user', content: toolResults });
+      } else {
+        // No tool results to return, agent should be done
+        return extractTextFromResponse(data);
+      }
+    }
   }
 
   function delay(ms) {
@@ -427,27 +714,107 @@
     return [];
   }
 
-  async function runPhase1(connConfig, document, onAgentUpdate) {
+  /**
+   * Phase 1: Run specialist agents in parallel.
+   * @param {object} analysisOptions - { webSearch, deepResearch, grammar, mathWebSearch }
+   */
+  async function runPhase1(connConfig, document, onAgentUpdate, analysisOptions) {
+    if (!analysisOptions) analysisOptions = {};
+
     var promises = AGENT_CONFIGS.map(function (agent) {
       onAgentUpdate(agent.key, 'running', null);
       var startTime = Date.now();
 
-      return callClaude(
-        connConfig,
-        SHARED_PREAMBLE + '\n\n' + agent.prompt,
-        'Here is the text to analyze:\n\n' + document
-      ).then(function (result) {
-        var feedback = parseJSON(result.text);
-        var elapsed = Math.round((Date.now() - startTime) / 1000);
-        onAgentUpdate(agent.key, 'complete', { items: feedback.length, elapsed: elapsed });
-        return {
-          key: agent.key,
-          name: agent.name,
-          status: 'fulfilled',
-          feedback: feedback,
-          error: null,
-        };
-      }).catch(function (err) {
+      // Build tools list for this agent
+      var tools = [];
+      var useWebSearch = false;
+      var useSubAgents = false;
+
+      // Web search: evidence and steelman always get it if enabled; math opt-in
+      if (analysisOptions.webSearch) {
+        if (agent.webSearch) useWebSearch = true;
+        if (agent.key === 'math' && analysisOptions.mathWebSearch) useWebSearch = true;
+      }
+      if (analysisOptions.mathWebSearch && agent.key === 'math') {
+        useWebSearch = true;
+      }
+
+      // Sub-agents: only if deep research is enabled
+      if (analysisOptions.deepResearch && agent.subAgents) {
+        useSubAgents = true;
+      }
+
+      if (useWebSearch) tools.push(WEB_SEARCH_TOOL);
+      if (useSubAgents) tools.push(SUBAGENT_TOOL);
+
+      // Build system prompt
+      var systemPrompt = SHARED_PREAMBLE + '\n\n' + agent.prompt;
+      if (useWebSearch) {
+        systemPrompt += WEB_SEARCH_PREAMBLE;
+      }
+
+      var agentPromise;
+      if (tools.length > 0) {
+        // Use tool-enabled path
+        var statusLabel = [];
+        if (useWebSearch) statusLabel.push('web search');
+        if (useSubAgents) statusLabel.push('sub-agents');
+        onAgentUpdate(agent.key, 'running', { tools: statusLabel });
+
+        agentPromise = runAgentWithTools(
+          connConfig,
+          systemPrompt,
+          'Here is the text to analyze:\n\n' + document,
+          tools,
+          agent.name,
+          function (type, detail) {
+            if (type === 'sub-agent') {
+              onAgentUpdate(agent.key, 'running', {
+                subAgent: detail.objective.substring(0, 60),
+                subAgentCount: detail.count,
+                tools: statusLabel,
+              });
+            } else if (type === 'sub-agent-done') {
+              onAgentUpdate(agent.key, 'running', {
+                subAgentCount: detail.count,
+                subAgentDone: true,
+                tools: statusLabel,
+              });
+            }
+          }
+        ).then(function (text) {
+          var feedback = parseJSON(text);
+          var elapsed = Math.round((Date.now() - startTime) / 1000);
+          onAgentUpdate(agent.key, 'complete', { items: feedback.length, elapsed: elapsed });
+          return {
+            key: agent.key,
+            name: agent.name,
+            status: 'fulfilled',
+            feedback: feedback,
+            error: null,
+          };
+        });
+      } else {
+        // Simple path — no tools
+        agentPromise = callClaude(
+          connConfig,
+          systemPrompt,
+          'Here is the text to analyze:\n\n' + document
+        ).then(function (result) {
+          var feedback = parseJSON(result.text);
+          var elapsed = Math.round((Date.now() - startTime) / 1000);
+          onAgentUpdate(agent.key, 'complete', { items: feedback.length, elapsed: elapsed });
+          return {
+            key: agent.key,
+            name: agent.name,
+            status: 'fulfilled',
+            feedback: feedback,
+            error: null,
+          };
+        });
+      }
+
+      return agentPromise.catch(function (err) {
         var elapsed = Math.round((Date.now() - startTime) / 1000);
         onAgentUpdate(agent.key, 'error', { error: err.message, elapsed: elapsed });
         return {
@@ -460,12 +827,53 @@
       });
     });
 
+    // Grammar agent (optional, runs in parallel but independent)
+    if (analysisOptions.grammar) {
+      var grammarPromise = (function () {
+        onAgentUpdate('grammar', 'running', null);
+        var startTime = Date.now();
+
+        return callClaudeRaw(connConfig, {
+          model: CONFIG.grammarModel,
+          max_tokens: CONFIG.maxTokens,
+          system: GRAMMAR_AGENT_CONFIG.prompt,
+          messages: [{ role: 'user', content: 'Here is the text to check for grammar, spelling, and punctuation errors:\n\n' + document }],
+        }).then(function (data) {
+          var text = extractTextFromResponse(data);
+          var feedback = parseJSON(text);
+          var elapsed = Math.round((Date.now() - startTime) / 1000);
+          onAgentUpdate('grammar', 'complete', { items: feedback.length, elapsed: elapsed });
+          return {
+            key: 'grammar',
+            name: 'Grammar & Mechanics',
+            status: 'fulfilled',
+            feedback: feedback,
+            error: null,
+            isGrammar: true,
+          };
+        }).catch(function (err) {
+          var elapsed = Math.round((Date.now() - startTime) / 1000);
+          onAgentUpdate('grammar', 'error', { error: err.message, elapsed: elapsed });
+          return {
+            key: 'grammar',
+            name: 'Grammar & Mechanics',
+            status: 'rejected',
+            feedback: [],
+            error: err.message,
+            isGrammar: true,
+          };
+        });
+      })();
+
+      promises.push(grammarPromise);
+    }
+
     return Promise.all(promises);
   }
 
   async function runPhase2(connConfig, document, phase1Results) {
     var agentOutputs = phase1Results
-      .filter(function (r) { return r.feedback.length > 0; })
+      .filter(function (r) { return r.feedback.length > 0 && !r.isGrammar; })
       .map(function (r) {
         return '=== ' + r.name + ' Agent ===\n' + JSON.stringify(r.feedback, null, 2);
       })
@@ -521,6 +929,7 @@
       math_empirical: 'Math & Empirical',
       structure: 'Structure & Coherence',
       counterargument: 'Counterarguments',
+      grammar: 'Grammar & Mechanics',
     };
 
     var severityEmoji = {
@@ -550,6 +959,13 @@
           lines.push('**Suggestion:** ' + item.suggestion);
           lines.push('');
         }
+        if (item.sources && item.sources.length > 0) {
+          lines.push('**Sources:**');
+          item.sources.forEach(function (src) {
+            lines.push('- [' + (src.title || src.url) + '](' + src.url + ')' + (src.finding ? ' \u2014 ' + src.finding : ''));
+          });
+          lines.push('');
+        }
         lines.push('---');
         lines.push('');
       });
@@ -575,13 +991,16 @@
     'Searching for the strongest counterarguments\u2026',
     'Analyzing paragraph transitions for coherence\u2026',
     'Verifying quantitative claims for plausibility\u2026',
+    'Searching the web for current data\u2026',
+    'Spawning research sub-agents for deep verification\u2026',
   ];
 
   var PHASE2_MESSAGES = [
     'Merging overlapping insights from specialist agents\u2026',
-    'Deduplicating feedback across all six specialists\u2026',
+    'Deduplicating feedback across all specialists\u2026',
     'Reconciling different analytical perspectives\u2026',
     'Structuring feedback by severity and category\u2026',
+    'Synthesizing cross-agent evidence\u2026',
   ];
 
   var PHASE3_MESSAGES = [
@@ -595,10 +1014,12 @@
   window.ForgeAgents = {
     CONFIG: CONFIG,
     AGENT_CONFIGS: AGENT_CONFIGS,
+    GRAMMAR_AGENT_CONFIG: GRAMMAR_AGENT_CONFIG,
     runPhase1: runPhase1,
     runPhase2: runPhase2,
     runPhase3: runPhase3,
     parseJSON: parseJSON,
+    extractTextFromResponse: extractTextFromResponse,
     exportToMarkdown: exportToMarkdown,
     resetUsage: resetUsage,
     getUsage: getUsage,

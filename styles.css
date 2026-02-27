@@ -1,6 +1,8 @@
 /* ═══════════════════════════════════════════════════
    Forge — Deep AI Writing Analysis
    Custom Styles
+   v2: Grammar highlights, accept/dismiss, toggle switches,
+       sources, sub-agents, analysis options
    ═══════════════════════════════════════════════════ */
 
 :root {
@@ -9,6 +11,8 @@
   --near-black: #1A1A2E;
   --highlight-bg: #FEF9C3;
   --highlight-active: #FDE68A;
+  --highlight-grammar: #DBEAFE;
+  --highlight-grammar-active: #BFDBFE;
 
   --cat-argument: #2563EB;
   --cat-evidence: #D97706;
@@ -16,6 +20,7 @@
   --cat-math: #7C3AED;
   --cat-structure: #475569;
   --cat-counter: #E11D48;
+  --cat-grammar: #64748B;
 
   --sev-critical: #DC2626;
   --sev-important: #D97706;
@@ -163,6 +168,84 @@ body {
   border-color: var(--near-black);
 }
 
+/* ─── Analysis Options ───────────────────────── */
+
+.analysis-options {
+  background: #F9FAFB;
+  border: 1px solid rgba(0,0,0,0.06);
+  border-radius: 10px;
+  padding: 20px 24px;
+  margin: 20px 0;
+}
+
+.analysis-options-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--near-black);
+  margin-bottom: 14px;
+}
+
+.toggle-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(0,0,0,0.04);
+}
+
+.toggle-option:last-of-type {
+  border-bottom: none;
+}
+
+.toggle-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.toggle-option-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--near-black);
+}
+
+.toggle-option-subtitle {
+  font-size: 12px;
+  color: #9CA3AF;
+}
+
+.toggle-switch {
+  width: 40px;
+  height: 22px;
+  border-radius: 11px;
+  background: #D1D5DB;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.toggle-switch.active {
+  background: var(--near-black);
+}
+
+.toggle-knob {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: white;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+}
+
+.toggle-switch.active .toggle-knob {
+  transform: translateX(18px);
+}
+
 /* ─── Progress View ───────────────────────────── */
 
 .progress-view {
@@ -241,6 +324,22 @@ body {
 .agent-card-status .check {
   color: #059669;
   font-weight: 700;
+}
+
+.sub-agent-indicator {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(0,0,0,0.04);
+  font-size: 12px;
+  color: #6B7280;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sub-agent-count {
+  font-size: 11px;
+  color: #9CA3AF;
 }
 
 .spinner-inline {
@@ -350,6 +449,7 @@ body {
 .filter-pill.cat-math_empirical.active { background: var(--cat-math); border-color: var(--cat-math); }
 .filter-pill.cat-structure.active { background: var(--cat-structure); border-color: var(--cat-structure); }
 .filter-pill.cat-counterargument.active { background: var(--cat-counter); border-color: var(--cat-counter); }
+.filter-pill.cat-grammar.active { background: var(--cat-grammar); border-color: var(--cat-grammar); }
 
 .split-panel {
   display: flex;
@@ -456,6 +556,25 @@ body {
   box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.4);
 }
 
+/* Grammar highlights: blue instead of yellow */
+.highlight-anchor.highlight-grammar {
+  background: var(--highlight-grammar);
+}
+
+.highlight-anchor.highlight-grammar:hover {
+  background: var(--highlight-grammar-active);
+}
+
+.highlight-anchor.highlight-grammar.active {
+  background: var(--highlight-grammar-active);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
+}
+
+/* Resolved highlights: dimmed */
+.highlight-anchor.highlight-resolved {
+  opacity: 0.35;
+}
+
 .highlight-badge {
   display: inline-flex;
   align-items: center;
@@ -471,6 +590,10 @@ body {
   margin-left: 3px;
   vertical-align: super;
   line-height: 1;
+}
+
+.highlight-badge-grammar {
+  background: var(--cat-grammar);
 }
 
 @keyframes highlight-pulse {
@@ -522,6 +645,29 @@ body {
 
 .feedback-card.severity-suggestion {
   border-left-color: var(--sev-suggestion);
+}
+
+/* Grammar card: dashed border, slightly different tint */
+.feedback-card.grammar-card {
+  border-left-style: dashed;
+  border-left-color: var(--cat-grammar);
+  background: #FAFBFC;
+}
+
+/* Resolved states */
+.feedback-card.resolved-accepted {
+  border-left-color: #059669;
+  opacity: 0.6;
+}
+
+.feedback-card.resolved-dismissed {
+  border-left-color: #D1D5DB;
+  opacity: 0.5;
+}
+
+.feedback-card.resolved-dismissed .feedback-title {
+  text-decoration: line-through;
+  color: #9CA3AF;
 }
 
 .feedback-card-header {
@@ -590,6 +736,54 @@ body {
 .category-badge.math_empirical { background: var(--cat-math); }
 .category-badge.structure { background: var(--cat-structure); }
 .category-badge.counterargument { background: var(--cat-counter); }
+.category-badge.grammar { background: var(--cat-grammar); }
+
+/* ─── Accept / Dismiss Buttons ───────────────── */
+
+.resolve-buttons {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.resolve-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid rgba(0,0,0,0.1);
+  background: white;
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  color: #9CA3AF;
+  padding: 0;
+  line-height: 1;
+  font-family: 'DM Sans', sans-serif;
+}
+
+.resolve-btn:hover {
+  border-color: rgba(0,0,0,0.2);
+}
+
+.resolve-btn.accept:hover,
+.resolve-btn.accept.active {
+  background: #ECFDF5;
+  border-color: #059669;
+  color: #059669;
+}
+
+.resolve-btn.dismiss:hover,
+.resolve-btn.dismiss.active {
+  background: #FEF2F2;
+  border-color: #DC2626;
+  color: #DC2626;
+}
+
+/* ─── Feedback Content ──────────────────────── */
 
 .feedback-quote {
   font-family: 'JetBrains Mono', monospace;
@@ -629,6 +823,40 @@ body {
 
 .feedback-suggestion strong {
   font-weight: 600;
+}
+
+/* ─── Sources Section ─────────────────────────── */
+
+.feedback-sources {
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: #F8FAFC;
+  border-radius: 6px;
+  border: 1px solid rgba(0,0,0,0.04);
+}
+
+.feedback-sources-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6B7280;
+  display: block;
+  margin-bottom: 6px;
+}
+
+.feedback-source {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #6B7280;
+  margin-bottom: 4px;
+}
+
+.feedback-source a {
+  color: #2563EB;
+  text-decoration: none;
+}
+
+.feedback-source a:hover {
+  text-decoration: underline;
 }
 
 /* ─── Stats Bar ───────────────────────────────── */
@@ -850,6 +1078,10 @@ body {
   .api-key-inner {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .analysis-options {
+    padding: 16px;
   }
 }
 
