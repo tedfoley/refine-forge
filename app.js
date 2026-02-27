@@ -917,7 +917,13 @@ function TextPanel({ text, feedbackItems, onHighlightClick, resolutions }) {
 
   useEffect(() => {
     if (!containerRef.current || !text) return;
-    const html = marked.parse(text, { breaks: true, gfm: true });
+    // Strip leading indentation (4+ spaces) so Markdown doesn't render code blocks
+    const cleaned = text.replace(/^[ \t]+/gm, (match) => {
+      // Keep up to 3 spaces (safe for Markdown), collapse anything more
+      const spaces = match.replace(/\t/g, '    ').length;
+      return spaces >= 4 ? '   ' : match;
+    });
+    const html = marked.parse(cleaned, { breaks: true, gfm: true });
     containerRef.current.innerHTML = html;
 
     if (feedbackItems && feedbackItems.length > 0) {
