@@ -7,7 +7,7 @@
   'use strict';
 
   var CONFIG = {
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     grammarModel: 'claude-haiku-4-5-20251001',
     maxTokens: 16000,
     subAgentMaxTokens: 4000,
