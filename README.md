@@ -13,33 +13,39 @@ All run simultaneously, each examining the full document through a different len
 
 | Agent | Focus | Web Search | Sub-Agents |
 |-------|-------|:----------:|:----------:|
-| Argument Structure | Logical fallacies, non-sequiturs, circular reasoning, unstated assumptions | | |
-| Evidence & Claims | Unsupported claims, cherry-picked data, outdated statistics | Yes | Yes |
-| Clarity & Exposition | Jargon, readability, unclear passages, missing context | | |
-| Math & Empirical | Mathematical errors, statistical inconsistencies, implausible numbers | Opt-in | |
-| Structural Coherence | Document flow, redundancy, missing sections, narrative arc | | |
-| Steelman & Counter | Strongest objections, alternative explanations, unaddressed counterarguments | Yes | Yes |
+| Argument Logic & Reasoning | Logical fallacies, non-sequiturs, circular reasoning, unstated assumptions, internal contradictions | | |
+| Evidence & Claims Auditor | Unsupported claims, citation quality, evidence-conclusion alignment, outdated information | Yes | Yes |
+| Clarity & Precision | Ambiguity, explanatory gaps, confusing passages, imprecise key claims | | |
+| Math & Empirical Verifier | Arithmetic errors, statistical reasoning, data interpretation, methodological issues | Opt-in | |
+| Structure & Flow | Document architecture, paragraph flow, pacing, redundancy, reader experience | | |
+| Steelman & Counterargument | Strongest objections, weak steelmanning, missing perspectives, intellectual humility gaps | Yes | Yes |
 | Grammar & Mechanics* | Grammar, spelling, punctuation, mechanical correctness (Haiku) | | |
 
 *Grammar agent is optional and bypasses the aggregator/critic pipeline.
 
+All agents receive a shared preamble calibrated to the selected **document type** (essay, blog post, academic paper, report, or other). Each agent has its own detailed specialist prompt, and agents with web search or sub-agent capabilities receive per-agent addendums describing how to use those tools effectively.
+
 ### Phase 2: Aggregation
-Merges overlapping feedback, deduplicates, and synthesizes cross-agent evidence into unified feedback items.
+Merges overlapping feedback, deduplicates, and synthesizes cross-agent evidence into unified feedback items. Prioritizes high-value merges where multiple agents found related information about the same underlying issue from different angles.
 
 ### Phase 3: Quality Filtering
-Aggressively removes vague, generic, or incorrect feedback. Only specific, actionable comments survive.
+Ruthlessly filters the aggregated list — removes nitpicky, subjective, wrong, redundant, or out-of-scope feedback. Only specific, actionable comments that are worth the author's time survive.
 
 ## Features
 
+- **Persistent analysis history** — past analyses are saved to localStorage and listed in the input view; click any previous session to reload its full results with highlights and resolutions intact
+- **Document type selector** — choose essay, blog post, academic paper, report, or other to calibrate agent expectations
 - **Bidirectional navigation** — click highlighted text to jump to feedback; click a quote in feedback to jump to the passage
 - **Category & severity filtering** — filter by type (Argument, Evidence, Clarity, etc.) and severity (Critical, Important, Suggestion)
 - **Sort by relevance or position** — switch between severity-first ordering and document-position ordering
-- **Accept/dismiss feedback** — triage each item as accepted or dismissed; state persists in localStorage
+- **Accept/dismiss feedback** — triage each item as accepted or dismissed; state persists across sessions
 - **Web search** — Evidence and Steelman agents verify claims against the live web (opt-in for Math agent)
 - **Deep research mode** — agents can spawn sub-agents for thorough multi-source verification
+- **Extended thinking** — enable reasoning models for deeper analysis (adds `thinking` with 10K token budget to Agents 1-6, Aggregator, and Critic)
 - **Grammar check** — optional 7th agent (Haiku) for grammar, spelling, and punctuation
-- **Model picker** — choose between Sonnet 4.6 (default), Opus 4.6, or Haiku 4.5; uses `-latest` aliases so versions auto-update
-- **Pre-analysis options** — toggle web search, deep research, grammar, and math web search before analyzing
+- **Select all** — one toggle to enable every analysis option at once
+- **Model picker** — choose between Sonnet 4, Opus 4.6, Sonnet 4.6, or Haiku 4.5
+- **Pre-analysis options** — toggle web search, deep research, grammar, math web search, and extended thinking before analyzing
 - **Cost estimation** — estimated cost range shown based on selected options
 - **Markdown support** — paste Markdown and it renders properly in the text panel
 - **Export** — download feedback as a `.md` file or copy to clipboard
@@ -68,8 +74,9 @@ Your API key stays on the server and is never sent to the browser.
 - Tailwind CSS (via CDN)
 - Babel Standalone (in-browser JSX)
 - Marked.js (Markdown rendering)
-- Anthropic Messages API (Claude)
+- Anthropic Messages API (Claude Sonnet 4 default, with Haiku 4.5 for grammar)
 - Anthropic Web Search Tool (`web_search_20250305`)
+- Extended Thinking API support
 - Hosted on GitHub Pages as static files
 
 ## File Structure
@@ -86,13 +93,15 @@ Your API key stays on the server and is never sent to the browser.
 
 ## Cost Estimates
 
-Using Sonnet 4.6 with default options (web search on):
+Using Sonnet 4 with default options (web search on):
 
-| Configuration | Tokens | Estimated Cost |
-|--------------|--------|---------------|
-| Base (no toggles) | ~50-60K | ~$0.15-0.30 |
-| With web search | ~60-80K | ~$0.20-0.50 |
-| With deep research | ~80-150K | ~$0.50-2.00 |
-| Grammar check add-on | +~5-10K | +~$0.02-0.05 |
+| Configuration | Estimated Cost |
+|--------------|---------------|
+| Base (no toggles) | ~$0.15-0.30 |
+| With web search | ~$0.20-0.50 |
+| With deep research | ~$0.50-2.00 |
+| With extended thinking | +~$0.35-1.20 |
+| Grammar check add-on | +~$0.02-0.05 |
+| All options enabled | ~$1.00-3.50 |
 
 Token usage, web search count, and sub-agent count are displayed in the bottom bar after each analysis.
