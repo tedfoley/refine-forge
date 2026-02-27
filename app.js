@@ -44,6 +44,19 @@ function simpleHash(str) {
   return 'forge-res-' + Math.abs(hash).toString(36);
 }
 
+/* ─── Utility: derive a title from essay text ──── */
+function deriveSessionTitle(text) {
+  var firstLine = text.split(/\r?\n/).find(function(l) { return l.trim().length > 0; }) || '';
+  // Strip markdown heading markers
+  firstLine = firstLine.replace(/^#{1,6}\s+/, '').trim();
+  if (firstLine.length <= 80) return firstLine || 'Untitled';
+  // Truncate at word boundary
+  var truncated = firstLine.substring(0, 80);
+  var lastSpace = truncated.lastIndexOf(' ');
+  if (lastSpace > 40) truncated = truncated.substring(0, lastSpace);
+  return truncated + '...';
+}
+
 /* ─── App Component ────────────────────────────── */
 
 function App() {
@@ -82,7 +95,24 @@ function App() {
     deepResearch: false,
     grammar: false,
     mathWebSearch: false,
+    extendedThinking: false,
+    documentType: 'essay',
   });
+
+  // History state
+  const [historyIndex, setHistoryIndex] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('forge-history-index') || '[]');
+    } catch (_) { return []; }
+  });
+  const [loadedSessionId, setLoadedSessionId] = useState(null);
+
+  // Persist history index
+  useEffect(() => {
+    try {
+      localStorage.setItem('forge-history-index', JSON.stringify(historyIndex));
+    } catch (_) {}
+  }, [historyIndex]);
 
   useEffect(() => {
     localStorage.setItem('forge-conn-mode', connMode);
@@ -147,6 +177,95 @@ function App() {
     } catch (_) {}
   }, [resolutions, feedbackItems, inputText]);
 
+  // Sync resolutions back into loaded session blob
+  useEffect(() => {
+    if (!loadedSessionId || Object.keys(resolutions).length === 0) return;
+    try {
+      const raw = localStorage.getItem('forge-session-' + loadedSessionId);
+      if (raw) {
+        const session = JSON.parse(raw);
+        session.resolutions = resolutions;
+        localStorage.setItem('forge-session-' + loadedSessionId, JSON.stringify(session));
+      }
+    } catch (_) {}
+  }, [resolutions, loadedSessionId]);
+
+  const saveSession = useCallback(function(data) {
+    var id = Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
+    var allItems = data.feedbackItems.concat(data.grammarItems);
+    var wordCount = data.text.trim().split(/\s+/).length;
+    var criticalCount = allItems.filter(function(i) { return i.severity === 'critical'; }).length;
+
+    var indexEntry = {
+      id: id,
+      title: deriveSessionTitle(data.text),
+      timestamp: Date.now(),
+      model: data.model,
+      wordCount: wordCount,
+      feedbackCount: allItems.length,
+      grammarCount: data.grammarItems.length,
+      criticalCount: criticalCount,
+    };
+
+    var sessionData = {
+      id: id,
+      text: data.text,
+      feedbackItems: data.feedbackItems,
+      grammarItems: data.grammarItems,
+      documentPositions: data.documentPositions,
+      resolutions: data.resolutions || {},
+      metadata: {
+        model: data.model,
+        timestamp: Date.now(),
+        totalTime: data.totalTime,
+        analysisOptions: data.analysisOptions,
+      },
+    };
+
+    try {
+      localStorage.setItem('forge-session-' + id, JSON.stringify(sessionData));
+      setHistoryIndex(function(prev) { return [indexEntry].concat(prev); });
+      setLoadedSessionId(id);
+    } catch (_) {
+      // localStorage quota exceeded — silently continue
+    }
+  }, []);
+
+  const loadSession = useCallback((id) => {
+    try {
+      const raw = localStorage.getItem('forge-session-' + id);
+      if (!raw) return;
+      const session = JSON.parse(raw);
+
+      // Restore Infinity values that became null in JSON
+      const positions = {};
+      if (session.documentPositions) {
+        Object.keys(session.documentPositions).forEach(function(k) {
+          positions[k] = session.documentPositions[k] === null ? Infinity : session.documentPositions[k];
+        });
+      }
+
+      setInputText(session.text || '');
+      setFeedbackItems(session.feedbackItems || []);
+      setGrammarItems(session.grammarItems || []);
+      setDocumentPositions(positions);
+      setResolutions(session.resolutions || {});
+      setTotalTime(session.metadata?.totalTime || 0);
+      setFilters({ severity: 'all', category: 'all' });
+      setSortMode('relevance');
+      setShowResolved(false);
+      setActiveFeedbackId(null);
+      setLoadedSessionId(id);
+      setView('results');
+    } catch (_) {}
+  }, []);
+
+  const deleteSession = useCallback((id) => {
+    try { localStorage.removeItem('forge-session-' + id); } catch (_) {}
+    setHistoryIndex(prev => prev.filter(entry => entry.id !== id));
+    if (loadedSessionId === id) setLoadedSessionId(null);
+  }, [loadedSessionId]);
+
   const handleAnalyze = useCallback(async () => {
     if (!inputText.trim() || !isConnReady) return;
 
@@ -209,7 +328,7 @@ function App() {
       setPhase('phase2');
       let aggregated;
       try {
-        aggregated = await ForgeAgents.runPhase2(connConfig, inputText, specialistResults);
+        aggregated = await ForgeAgents.runPhase2(connConfig, inputText, specialistResults, analysisOptions);
       } catch (err) {
         console.warn('Aggregator failed, using raw specialist output:', err);
         aggregated = [];
@@ -234,7 +353,7 @@ function App() {
       let finalFeedback;
       if (aggregated.length > 0) {
         try {
-          finalFeedback = await ForgeAgents.runPhase3(connConfig, inputText, aggregated);
+          finalFeedback = await ForgeAgents.runPhase3(connConfig, inputText, aggregated, analysisOptions);
         } catch (err) {
           console.warn('Critic failed, using aggregated output:', err);
           finalFeedback = aggregated;
@@ -270,10 +389,27 @@ function App() {
 
       // Load existing resolutions for this text
       const resKey = simpleHash(inputText);
+      let loadedResolutions = {};
       try {
         const stored = localStorage.getItem(resKey);
-        if (stored) setResolutions(JSON.parse(stored));
+        if (stored) {
+          loadedResolutions = JSON.parse(stored);
+          setResolutions(loadedResolutions);
+        }
       } catch (_) {}
+
+      // Save to history
+      const elapsed = Math.round((Date.now() - startTime) / 1000);
+      saveSession({
+        text: inputText,
+        feedbackItems: finalFeedback,
+        grammarItems: grammarFeedback,
+        documentPositions: positions,
+        resolutions: loadedResolutions,
+        model: model,
+        totalTime: elapsed,
+        analysisOptions: analysisOptions,
+      });
 
       setPhase(null);
       setView('results');
@@ -283,10 +419,11 @@ function App() {
       setView('input');
       setPhase(null);
     }
-  }, [inputText, connConfig, isConnReady, analysisOptions]);
+  }, [inputText, connConfig, isConnReady, analysisOptions, model, saveSession]);
 
   const handleNewAnalysis = useCallback(() => {
     setView('input');
+    setInputText('');
     setFeedbackItems([]);
     setGrammarItems([]);
     setActiveFeedbackId(null);
@@ -297,6 +434,7 @@ function App() {
     setResolutions({});
     setShowResolved(false);
     setDocumentPositions({});
+    setLoadedSessionId(null);
   }, []);
 
   const handleResolve = useCallback((id, resolution) => {
@@ -340,6 +478,9 @@ function App() {
           analysisOptions={analysisOptions}
           onAnalysisOptionsChange={setAnalysisOptions}
           wordCount={inputText.trim().length > 0 ? inputText.trim().split(/\s+/).length : 0}
+          historyIndex={historyIndex}
+          onLoadSession={loadSession}
+          onDeleteSession={deleteSession}
         />
       )}
 
@@ -411,11 +552,25 @@ function InputView({
   text, onTextChange, onAnalyze, connMode, onConnModeChange, workerUrl, onWorkerUrlChange,
   apiKey, onApiKeyChange, isConnReady, model, onModelChange,
   analysisOptions, onAnalysisOptionsChange, wordCount,
+  historyIndex, onLoadSession, onDeleteSession,
 }) {
   const canAnalyze = text.trim().length > 50 && isConnReady;
 
+  const TOGGLE_KEYS = ['webSearch', 'deepResearch', 'grammar', 'mathWebSearch', 'extendedThinking'];
+
   const toggleOption = (key) => {
     onAnalysisOptionsChange(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const allSelected = TOGGLE_KEYS.every(k => analysisOptions[k]);
+
+  const handleSelectAll = () => {
+    const newVal = !allSelected;
+    onAnalysisOptionsChange(prev => {
+      const next = { ...prev };
+      TOGGLE_KEYS.forEach(k => { next[k] = newVal; });
+      return next;
+    });
   };
 
   // Cost estimation
@@ -423,6 +578,7 @@ function InputView({
     let low = 0.15, high = 0.30;
     if (analysisOptions.webSearch) { low = 0.20; high = 0.50; }
     if (analysisOptions.deepResearch) { low = 0.50; high = 2.00; }
+    if (analysisOptions.extendedThinking) { low += 0.35; high += 1.20; }
     if (analysisOptions.grammar) { low += 0.02; high += 0.05; }
     if (analysisOptions.mathWebSearch) { low += 0.02; high += 0.10; }
     return '$' + low.toFixed(2) + '-' + high.toFixed(2);
@@ -500,6 +656,12 @@ function InputView({
         )}
       </div>
 
+      <HistoryList
+        historyIndex={historyIndex}
+        onLoadSession={onLoadSession}
+        onDeleteSession={onDeleteSession}
+      />
+
       <textarea
         value={text}
         onChange={e => onTextChange(e.target.value)}
@@ -509,7 +671,39 @@ function InputView({
 
       {/* Pre-analysis options */}
       <div className="analysis-options">
-        <div className="analysis-options-title">Analysis Options</div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+          <div className="analysis-options-title" style={{ marginBottom: 0 }}>Analysis Options</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: '#6B7280' }}>Document type:</label>
+            <select
+              value={analysisOptions.documentType}
+              onChange={e => onAnalysisOptionsChange(prev => ({ ...prev, documentType: e.target.value }))}
+              style={{
+                fontSize: 12, padding: '4px 8px', borderRadius: 5,
+                border: '1px solid rgba(0,0,0,0.1)', background: 'white',
+                fontFamily: "'DM Sans', sans-serif", cursor: 'pointer',
+              }}
+            >
+              <option value="essay">Essay</option>
+              <option value="blog post">Blog Post</option>
+              <option value="academic paper">Academic Paper</option>
+              <option value="report">Report</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Select All */}
+        <label className="toggle-option select-all-toggle" onClick={handleSelectAll}>
+          <div className="toggle-option-text">
+            <span className="toggle-option-label">Select all</span>
+            <span className="toggle-option-subtitle">Enable all analysis options</span>
+          </div>
+          <div className={`toggle-switch ${allSelected ? 'active' : ''}`}>
+            <div className="toggle-knob" />
+          </div>
+        </label>
+        <div className="select-all-divider" />
 
         <ToggleOption
           checked={analysisOptions.webSearch}
@@ -535,6 +729,12 @@ function InputView({
           label="Math Verifier Web Search"
           subtitle="Enable web search for quantitative verification"
         />
+        <ToggleOption
+          checked={analysisOptions.extendedThinking}
+          onChange={() => toggleOption('extendedThinking')}
+          label="Extended Thinking"
+          subtitle="Use reasoning models for deeper analysis (slower, higher quality)"
+        />
 
         <div style={{ fontSize: 12, color: '#9CA3AF', marginTop: 8 }}>
           Estimated cost: {costEstimate} based on selected options
@@ -559,6 +759,61 @@ function InputView({
           </span>
         )}
       </div>
+    </div>
+  );
+}
+
+/* ─── History List ──────────────────────────────── */
+
+function HistoryList({ historyIndex, onLoadSession, onDeleteSession }) {
+  if (!historyIndex || historyIndex.length === 0) return null;
+
+  function formatRelativeTime(timestamp) {
+    var diff = Date.now() - timestamp;
+    var mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return mins + 'm ago';
+    var hours = Math.floor(mins / 60);
+    if (hours < 24) return hours + 'h ago';
+    var days = Math.floor(hours / 24);
+    if (days < 30) return days + 'd ago';
+    return new Date(timestamp).toLocaleDateString();
+  }
+
+  return (
+    <div className="history-list">
+      <div className="history-header">Recent Analyses</div>
+      {historyIndex.map(function(entry) {
+        return (
+          <div
+            key={entry.id}
+            className="history-card"
+            onClick={function() { onLoadSession(entry.id); }}
+          >
+            <div className="history-card-title">{entry.title}</div>
+            <div className="history-card-meta">
+              <span>{formatRelativeTime(entry.timestamp)}</span>
+              <span>{entry.wordCount} words</span>
+              <span>{entry.feedbackCount} item{entry.feedbackCount !== 1 ? 's' : ''}</span>
+              {entry.criticalCount > 0 && (
+                <span style={{ color: '#DC2626', fontWeight: 600 }}>
+                  {entry.criticalCount} critical
+                </span>
+              )}
+              {entry.grammarCount > 0 && (
+                <span style={{ color: '#64748B' }}>
+                  {entry.grammarCount} grammar
+                </span>
+              )}
+            </div>
+            <button
+              className="history-delete-btn"
+              onClick={function(e) { e.stopPropagation(); onDeleteSession(entry.id); }}
+              title="Delete this session"
+            >&times;</button>
+          </div>
+        );
+      })}
     </div>
   );
 }
