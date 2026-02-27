@@ -25,6 +25,14 @@ const CATEGORY_META = {
 
 const SEVERITY_ORDER = { critical: 0, important: 1, suggestion: 2 };
 
+const VALID_MODEL_IDS = new Set(MODEL_OPTIONS.map(m => m.id));
+
+function getValidModel() {
+  const stored = localStorage.getItem('forge-model');
+  if (stored && VALID_MODEL_IDS.has(stored)) return stored;
+  return MODEL_OPTIONS[0].id;
+}
+
 /* ─── Utility: simple hash for localStorage keys ── */
 function simpleHash(str) {
   var hash = 0;
@@ -49,7 +57,7 @@ function App() {
     () => localStorage.getItem('forge-api-key') || ''
   );
   const [model, setModel] = useState(
-    () => localStorage.getItem('forge-model') || 'claude-sonnet-4-6'
+    () => getValidModel()
   );
   const [view, setView] = useState('input');
   const [inputText, setInputText] = useState('');
