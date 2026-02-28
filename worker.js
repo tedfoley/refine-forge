@@ -32,6 +32,7 @@ function corsHeaders(origin) {
     'Access-Control-Allow-Origin': origin || ALLOWED_ORIGINS[0],
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, anthropic-version, anthropic-beta',
+    'Access-Control-Expose-Headers': 'retry-after, anthropic-ratelimit-requests-limit, anthropic-ratelimit-requests-remaining, anthropic-ratelimit-requests-reset, anthropic-ratelimit-tokens-limit, anthropic-ratelimit-tokens-remaining, anthropic-ratelimit-tokens-reset',
     'Access-Control-Max-Age': '86400',
   };
 }
@@ -122,12 +123,30 @@ export default {
 
       const responseBody = await anthropicResponse.text();
 
+      // Build response headers — forward rate limit headers from Anthropic
+      const responseHeaders = {
+        ...corsHeaders(responseOrigin),
+        'Content-Type': 'application/json',
+      };
+
+      // Forward retry-after and rate limit headers so the client can pace itself
+      const headersToForward = [
+        'retry-after',
+        'anthropic-ratelimit-requests-limit',
+        'anthropic-ratelimit-requests-remaining',
+        'anthropic-ratelimit-requests-reset',
+        'anthropic-ratelimit-tokens-limit',
+        'anthropic-ratelimit-tokens-remaining',
+        'anthropic-ratelimit-tokens-reset',
+      ];
+      for (const h of headersToForward) {
+        const val = anthropicResponse.headers.get(h);
+        if (val) responseHeaders[h] = val;
+      }
+
       return new Response(responseBody, {
         status: anthropicResponse.status,
-        headers: {
-          ...corsHeaders(responseOrigin),
-          'Content-Type': 'application/json',
-        },
+        headers: responseHeaders,
       });
     } catch (err) {
       return new Response(JSON.stringify({ error: 'Proxy error: ' + err.message }), {

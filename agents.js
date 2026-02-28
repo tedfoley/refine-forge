@@ -16,7 +16,7 @@
     subAgentMaxTokens: 4000,
     directApiUrl: 'https://api.anthropic.com/v1/messages',
     retryDelay: 2000,
-    maxRetries: 1,
+    maxRetries: 8,
     maxSubAgents: 3,
     subAgentTimeout: 60000,
     toolAgentTimeout: 180000,
@@ -744,7 +744,23 @@ Return ONLY the JSON array.';
       var errMsg = (errBody.error && errBody.error.message) || ('API error: ' + response.status);
 
       if ((response.status >= 500 || response.status === 429) && attempt < CONFIG.maxRetries) {
-        await delay(CONFIG.retryDelay);
+        // On 429, read retry-after header for precise wait time
+        var waitMs = CONFIG.retryDelay;
+        if (response.status === 429) {
+          var retryAfter = response.headers.get('retry-after');
+          if (retryAfter) {
+            var retrySeconds = parseFloat(retryAfter);
+            if (!isNaN(retrySeconds) && retrySeconds > 0) {
+              waitMs = Math.ceil(retrySeconds * 1000) + 500; // add 500ms buffer
+            }
+          }
+          // If no retry-after header, use exponential backoff capped at 60s
+          if (!retryAfter) {
+            waitMs = Math.min(CONFIG.retryDelay * Math.pow(2, attempt), 60000);
+          }
+          console.log('Forge: Rate limited (attempt ' + (attempt + 1) + '/' + CONFIG.maxRetries + '), waiting ' + Math.round(waitMs / 1000) + 's...');
+        }
+        await delay(waitMs);
         return callClaudeRaw(connConfig, body, attempt + 1);
       }
       throw new Error(errMsg);
