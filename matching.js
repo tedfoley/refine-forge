@@ -170,7 +170,8 @@
     for (var i = itemsWithPos.length - 1; i >= 0; i--) {
       var entry = itemsWithPos[i];
       try {
-        var isGrammar = entry.item.category === 'grammar';
+        var cats = ForgeAgents.getItemCategories(entry.item);
+        var isGrammar = cats.indexOf('grammar') !== -1;
         var resolution = resolutions && resolutions[entry.item.id];
         wrapMatch(nodeMap, fullText, entry.match, entry.item.id, onClickFn, isGrammar, resolution);
       } catch (e) {

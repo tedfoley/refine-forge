@@ -444,10 +444,10 @@ INPUT:\n\
 You will receive the raw JSON output from each specialist agent, labeled by agent name.\n\
 \n\
 ABSOLUTE RULE — ONE ITEM PER PASSAGE:\n\
-The final output MUST NOT contain two or more feedback items that reference the same sentence, the same line, or overlapping passages in the document. If multiple agents flagged the same passage (even from completely different angles — e.g., one flags a clarity issue and another flags a logic issue on the same sentence), you MUST merge them into a SINGLE feedback item. The merged item should:\n\
+The final output MUST NOT contain two or more feedback items that reference the same sentence, the same line, or overlapping passages in the document. If multiple agents flagged the same passage (even from completely different angles — e.g., one flags a clarity issue and another flags a logic issue on the same sentence), you MUST merge them into a SINGLE feedback item with MULTIPLE category tags. The merged item should:\n\
 - Use the quote that best captures the shared passage\n\
+- Set "categories" to an ARRAY of ALL relevant category tags (e.g., ["argument_logic", "clarity"] if both a logic and clarity issue exist)\n\
 - Combine all perspectives into one comprehensive explanation (e.g., "This sentence has both a clarity problem and a logical gap: [clarity issue]. Additionally, [logic issue].")\n\
-- Pick the most relevant primary category, but note secondary categories in the explanation\n\
 - Use the highest applicable severity\n\
 - Combine all suggestions into one actionable recommendation\n\
 \n\
@@ -455,7 +455,7 @@ To enforce this: after generating your output, scan for any two items whose quot
 \n\
 YOUR TASKS:\n\
 \n\
-1. DEDUPLICATE AND MERGE BY PASSAGE: Group all input items by the passage they reference. Any items touching the same sentence or adjacent sentences about the same topic MUST become one item. This is your most important task.\n\
+1. DEDUPLICATE AND MERGE BY PASSAGE: Group all input items by the passage they reference. Any items touching the same sentence or adjacent sentences about the same topic MUST become one item with multiple category tags. This is your most important task.\n\
 \n\
 2. CROSS-AGENT EVIDENCE SYNTHESIS:\n\
 Pay special attention to cases where multiple agents have found RELATED information about the same underlying issue from different angles. These are your highest-value merges:\n\
@@ -481,12 +481,15 @@ Return a JSON array of objects, each with:\n\
   "id": sequential integer starting at 1,\n\
   "quote": "exact verbatim text from the original document",\n\
   "title": "Concise descriptive title",\n\
-  "category": "the PRIMARY category — pick the most relevant from: argument_logic | evidence | clarity | structure | counterargument | math_empirical",\n\
+  "categories": ["array", "of", "relevant", "category", "tags"],\n\
   "severity": "critical | important | suggestion",\n\
   "explanation": "Merged explanation incorporating insights from ALL agents that flagged this passage. If multiple categories apply, address each perspective.",\n\
   "suggestion": "Specific, actionable recommendation that addresses all identified issues in this passage",\n\
   "sources": [{"url": "...", "title": "...", "finding": "..."}]  // only if sources exist\n\
 }\n\
+\n\
+IMPORTANT: The "categories" field is an ARRAY, not a string. Valid tags: argument_logic, evidence, clarity, structure, counterargument, math_empirical.\n\
+If an item only has one category, still use an array: ["argument_logic"]. If multiple agents from different domains flagged the same passage, include ALL their categories: ["argument_logic", "clarity", "evidence"].\n\
 \n\
 Order the output by severity (critical first, then important, then suggestion), with items of equal severity ordered by their position in the document.\n\
 \n\
@@ -511,13 +514,13 @@ FILTER CRITERIA — REMOVE items that are:\n\
 \n\
 3. WRONG: Verify each feedback item against the original text. Does the quoted passage actually exist? Does the feedback accurately describe the issue? Sometimes agents misread or misinterpret passages — catch those errors.\n\
 \n\
-4. REDUNDANT OR OVERLAPPING: Even after aggregation, some items may make essentially the same point or reference the same passage. If two items quote the same sentence or overlapping text, MERGE them into one item combining both perspectives — do NOT keep both. The final output must have at most one item per passage.\n\
+4. REDUNDANT OR OVERLAPPING: Even after aggregation, some items may make essentially the same point or reference the same passage. If two items quote the same sentence or overlapping text, MERGE them into one item combining both perspectives and merge their "categories" arrays — do NOT keep both. The final output must have at most one item per passage.\n\
 \n\
 5. OUTSIDE THE AUTHOR\'S SCOPE: Suggestions to write a different piece than the one the author wrote. If the author is writing about X, don\'t keep feedback that says "you should also discuss Y" unless Y is clearly essential to the argument about X.\n\
 \n\
 6. DISPROPORTIONATE: Feedback whose severity is miscalibrated. A minor clarity issue marked "critical" should be downgraded or removed. A genuinely important finding marked "suggestion" should be upgraded.\n\
 \n\
-7. UNSOURCED EVIDENCE CLAIMS: Any feedback item with category "evidence" that does not include a "sources" field with at least one specific, authoritative citation should be REMOVED. Evidence critiques without sources are not actionable — the author has no way to verify or act on them. The only exception is if the feedback identifies a clear internal inconsistency within the document itself (contradictory numbers, self-contradicting claims) that requires no external source.\n\
+7. UNSOURCED EVIDENCE CLAIMS: Any feedback item whose "categories" array includes "evidence" that does not include a "sources" field with at least one specific, authoritative citation should be REMOVED. Evidence critiques without sources are not actionable — the author has no way to verify or act on them. The only exception is if the feedback identifies a clear internal inconsistency within the document itself (contradictory numbers, self-contradicting claims) that requires no external source.\n\
 \n\
 PRESERVE items that are:\n\
 \n\
@@ -544,12 +547,14 @@ Return a JSON array of objects with the same schema as the input:\n\
   "id": sequential integer starting at 1,\n\
   "quote": "verified exact verbatim text from the original document",\n\
   "title": "Concise descriptive title",\n\
-  "category": "argument_logic | evidence | clarity | structure | counterargument | math_empirical",\n\
+  "categories": ["array", "of", "relevant", "tags"],\n\
   "severity": "critical | important | suggestion",\n\
   "explanation": "Clear, accurate explanation",\n\
   "suggestion": "Specific, actionable recommendation",\n\
   "sources": [...]  // preserve if present\n\
 }\n\
+\n\
+IMPORTANT: "categories" is an ARRAY. Valid tags: argument_logic, evidence, clarity, structure, counterargument, math_empirical. Preserve all category tags from the input. When merging items, combine their categories arrays.\n\
 \n\
 Target: Remove 20-40% of input items. If the Aggregator did a good job, you might only remove 20%. If the input is padded with low-value items, remove more aggressively. The final list should be tight — every item worth the author\'s time.\n\
 \n\
@@ -1171,14 +1176,26 @@ Return ONLY the JSON array.';
     return parseJSON(result.text);
   }
 
+  function getItemCategories(item) {
+    if (Array.isArray(item.categories)) return item.categories;
+    if (item.category) return [item.category];
+    return ['other'];
+  }
+
+  function itemHasCategory(item, cat) {
+    return getItemCategories(item).indexOf(cat) !== -1;
+  }
+
   function exportToMarkdown(feedbackItems) {
     var lines = ['# Forge Analysis Report', ''];
 
     var byCategory = {};
     feedbackItems.forEach(function (item) {
-      var cat = item.category || 'other';
-      if (!byCategory[cat]) byCategory[cat] = [];
-      byCategory[cat].push(item);
+      var cats = getItemCategories(item);
+      // File under the primary (first) category
+      var primaryCat = cats[0] || 'other';
+      if (!byCategory[primaryCat]) byCategory[primaryCat] = [];
+      byCategory[primaryCat].push(item);
     });
 
     var categoryNames = {
@@ -1204,7 +1221,9 @@ Return ONLY the JSON array.';
       byCategory[cat].forEach(function (item) {
         var sev = severityEmoji[item.severity] || '';
         lines.push('### ' + sev + ' ' + (item.title || 'Untitled'));
-        lines.push('**Severity:** ' + (item.severity || 'unknown'));
+        var cats = getItemCategories(item);
+        var catLabels = cats.map(function(c) { return categoryNames[c] || c; });
+        lines.push('**Severity:** ' + (item.severity || 'unknown') + ' | **Categories:** ' + catLabels.join(', '));
         lines.push('');
         if (item.quote) {
           lines.push('> ' + item.quote.replace(/\n/g, '\n> '));
@@ -1282,6 +1301,8 @@ Return ONLY the JSON array.';
     parseJSON: parseJSON,
     extractTextFromResponse: extractTextFromResponse,
     exportToMarkdown: exportToMarkdown,
+    getItemCategories: getItemCategories,
+    itemHasCategory: itemHasCategory,
     resetUsage: resetUsage,
     getUsage: getUsage,
     THINKING_MESSAGES: THINKING_MESSAGES,

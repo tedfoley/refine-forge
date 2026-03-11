@@ -378,7 +378,7 @@ function App() {
         grammarFeedback = grammarResult.feedback.map((item, idx) => ({
           ...item,
           id: startId + idx,
-          category: 'grammar',
+          categories: ['grammar'],
           severity: 'suggestion',
         }));
       }
@@ -955,7 +955,7 @@ function ResultsView({
   const filteredItems = useMemo(() => {
     let items = feedbackItems.filter(item => {
       if (filters.severity !== 'all' && item.severity !== filters.severity) return false;
-      if (filters.category !== 'all' && item.category !== filters.category) return false;
+      if (filters.category !== 'all' && !ForgeAgents.itemHasCategory(item, filters.category)) return false;
       // Hide resolved items when showResolved is off
       if (!showResolved && resolutions[item.id]) return false;
       return true;
@@ -987,13 +987,13 @@ function ResultsView({
   const textPanelItems = useMemo(() => {
     return feedbackItems.filter(item => {
       if (filters.severity !== 'all' && item.severity !== filters.severity) return false;
-      if (filters.category !== 'all' && item.category !== filters.category) return false;
+      if (filters.category !== 'all' && !ForgeAgents.itemHasCategory(item, filters.category)) return false;
       return true;
     });
   }, [feedbackItems, filters]);
 
   const counts = useMemo(() => {
-    const substantive = feedbackItems.filter(i => i.category !== 'grammar');
+    const substantive = feedbackItems.filter(i => !ForgeAgents.itemHasCategory(i, 'grammar'));
     const c = { total: substantive.length, critical: 0, important: 0, suggestion: 0, grammar: grammarCount };
     substantive.forEach(item => { if (c[item.severity] !== undefined) c[item.severity]++; });
     return c;
@@ -1031,7 +1031,9 @@ function ResultsView({
 
   const presentCategories = useMemo(() => {
     const cats = new Set();
-    feedbackItems.forEach(item => cats.add(item.category));
+    feedbackItems.forEach(item => {
+      ForgeAgents.getItemCategories(item).forEach(c => cats.add(c));
+    });
     return Array.from(cats);
   }, [feedbackItems]);
 
@@ -1206,8 +1208,8 @@ function TextPanel({ text, feedbackItems, onHighlightClick, resolutions }) {
 /* ─── Feedback Card ────────────────────────────── */
 
 function FeedbackCard({ item, isActive, onQuoteClick, resolution, onResolve }) {
-  const catMeta = CATEGORY_META[item.category] || { label: item.category, cls: '' };
-  const isGrammar = item.category === 'grammar';
+  const itemCats = ForgeAgents.getItemCategories(item);
+  const isGrammar = itemCats.indexOf('grammar') !== -1;
   const isAccepted = resolution === 'accepted';
   const isDismissed = resolution === 'dismissed';
 
@@ -1229,7 +1231,10 @@ function FeedbackCard({ item, isActive, onQuoteClick, resolution, onResolve }) {
           {item.title}
         </span>
         <span className={`severity-badge ${item.severity}`}>{item.severity}</span>
-        <span className={`category-badge ${catMeta.cls}`}>{catMeta.label}</span>
+        {itemCats.map(cat => {
+          const meta = CATEGORY_META[cat] || { label: cat, cls: '' };
+          return <span key={cat} className={`category-badge ${meta.cls}`}>{meta.label}</span>;
+        })}
 
         {/* Accept/Dismiss buttons */}
         <div className="resolve-buttons">
