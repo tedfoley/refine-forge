@@ -695,7 +695,7 @@ Return ONLY the JSON array.';
   /**
    * Raw API call — returns full response data (for tool-use loops).
    */
-  async function callClaudeRaw(connConfig, body, attempt) {
+  async function callClaudeRaw(connConfig, body, attempt, onRetry) {
     if (!attempt) attempt = 0;
 
     var useProxy = connConfig.mode === 'proxy';
@@ -732,8 +732,9 @@ Return ONLY the JSON array.';
       });
     } catch (err) {
       if (attempt < CONFIG.maxRetries) {
+        if (onRetry) onRetry({ attempt: attempt + 1, max: CONFIG.maxRetries, waitMs: CONFIG.retryDelay, type: 'network' });
         await delay(CONFIG.retryDelay);
-        return callClaudeRaw(connConfig, body, attempt + 1);
+        return callClaudeRaw(connConfig, body, attempt + 1, onRetry);
       }
       throw new Error('Network error: ' + err.message);
     }
@@ -760,8 +761,9 @@ Return ONLY the JSON array.';
           }
           console.log('Forge: Rate limited (attempt ' + (attempt + 1) + '/' + CONFIG.maxRetries + '), waiting ' + Math.round(waitMs / 1000) + 's...');
         }
+        if (onRetry) onRetry({ attempt: attempt + 1, max: CONFIG.maxRetries, waitMs: waitMs, type: response.status === 429 ? 'rate_limit' : 'server_error' });
         await delay(waitMs);
-        return callClaudeRaw(connConfig, body, attempt + 1);
+        return callClaudeRaw(connConfig, body, attempt + 1, onRetry);
       }
       throw new Error(errMsg);
     }
@@ -794,7 +796,8 @@ Return ONLY the JSON array.';
       delete body.temperature;
     }
 
-    var data = await callClaudeRaw(connConfig, body);
+    var onRetry = (options && options.onRetry) || null;
+    var data = await callClaudeRaw(connConfig, body, 0, onRetry);
     return { text: extractTextFromResponse(data), usage: data.usage };
   }
 
@@ -1111,7 +1114,7 @@ Return ONLY the JSON array.';
    * Phase 2: Aggregator — merges and deduplicates specialist feedback.
    * Supports optional extended thinking.
    */
-  async function runPhase2(connConfig, document, phase1Results, analysisOptions) {
+  async function runPhase2(connConfig, document, phase1Results, analysisOptions, onRetry) {
     var agentOutputs = phase1Results
       .filter(function (r) { return r.feedback.length > 0 && !r.isGrammar; })
       .map(function (r) {
@@ -1135,6 +1138,7 @@ Return ONLY the JSON array.';
     if (analysisOptions && analysisOptions.extendedThinking) {
       options.thinking = true;
     }
+    if (onRetry) options.onRetry = onRetry;
 
     var result = await callClaude(connConfig, AGGREGATOR_PROMPT, userMessage, options);
     return parseJSON(result.text);
@@ -1144,7 +1148,7 @@ Return ONLY the JSON array.';
    * Phase 3: Critic — final quality filter.
    * Supports optional extended thinking.
    */
-  async function runPhase3(connConfig, document, aggregated, analysisOptions) {
+  async function runPhase3(connConfig, document, aggregated, analysisOptions, onRetry) {
     if (!aggregated || aggregated.length === 0) return [];
 
     var userMessage = [
@@ -1161,6 +1165,7 @@ Return ONLY the JSON array.';
     if (analysisOptions && analysisOptions.extendedThinking) {
       options.thinking = true;
     }
+    if (onRetry) options.onRetry = onRetry;
 
     var result = await callClaude(connConfig, CRITIC_PROMPT, userMessage, options);
     return parseJSON(result.text);

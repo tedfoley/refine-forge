@@ -82,6 +82,7 @@ function App() {
   const [totalTime, setTotalTime] = useState(0);
   const [error, setError] = useState(null);
   const [thinkingMsg, setThinkingMsg] = useState('');
+  const [retryStatus, setRetryStatus] = useState(null); // { attempt, max, waitMs, type }
   const [filters, setFilters] = useState({ severity: 'all', category: 'all' });
   const [showExport, setShowExport] = useState(false);
 
@@ -324,11 +325,15 @@ function App() {
         throw new Error('All specialist agents failed. Please check your connection settings and try again.');
       }
 
-      // Phase 2
+      // Phase 2 — cooldown to let rate limit window reset after Phase 1
       setPhase('phase2');
+      setRetryStatus(null);
+
+      const onRetryCallback = (info) => setRetryStatus(info);
+
       let aggregated;
       try {
-        aggregated = await ForgeAgents.runPhase2(connConfig, inputText, specialistResults, analysisOptions);
+        aggregated = await ForgeAgents.runPhase2(connConfig, inputText, specialistResults, analysisOptions, onRetryCallback);
       } catch (err) {
         console.warn('Aggregator failed, using raw specialist output:', err);
         aggregated = [];
@@ -350,10 +355,11 @@ function App() {
 
       // Phase 3
       setPhase('phase3');
+      setRetryStatus(null);
       let finalFeedback;
       if (aggregated.length > 0) {
         try {
-          finalFeedback = await ForgeAgents.runPhase3(connConfig, inputText, aggregated, analysisOptions);
+          finalFeedback = await ForgeAgents.runPhase3(connConfig, inputText, aggregated, analysisOptions, onRetryCallback);
         } catch (err) {
           console.warn('Critic failed, using aggregated output:', err);
           finalFeedback = aggregated;
@@ -490,6 +496,7 @@ function App() {
           agentStatuses={agentStatuses}
           thinkingMsg={thinkingMsg}
           analysisOptions={analysisOptions}
+          retryStatus={retryStatus}
         />
       )}
 
@@ -836,7 +843,7 @@ function ToggleOption({ checked, onChange, label, subtitle }) {
 
 /* ─── Progress View ────────────────────────────── */
 
-function ProgressView({ phase, agentStatuses, thinkingMsg, analysisOptions }) {
+function ProgressView({ phase, agentStatuses, thinkingMsg, analysisOptions, retryStatus }) {
   const phaseLabels = { phase1: 'Phase 1 of 3', phase2: 'Phase 2 of 3', phase3: 'Phase 3 of 3' };
   const phaseTitles = { phase1: 'Specialist Analysis', phase2: 'Aggregation & Deduplication', phase3: 'Quality Filtering' };
 
@@ -922,6 +929,13 @@ function ProgressView({ phase, agentStatuses, thinkingMsg, analysisOptions }) {
               ? 'Merging and deduplicating specialist feedback...'
               : 'Quality-filtering and strengthening feedback...'}
           </p>
+          {retryStatus && (
+            <p style={{ fontSize: 13, color: '#D97706', marginTop: 8, fontWeight: 500 }}>
+              {retryStatus.type === 'rate_limit'
+                ? `Rate limited \u2014 waiting ${Math.round(retryStatus.waitMs / 1000)}s before retry (attempt ${retryStatus.attempt}/${retryStatus.max})`
+                : `Server error \u2014 retrying (attempt ${retryStatus.attempt}/${retryStatus.max})`}
+            </p>
+          )}
         </div>
       )}
 
