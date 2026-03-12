@@ -157,9 +157,9 @@ function App() {
     return () => clearInterval(interval);
   }, [view, phase]);
 
-  // Load resolutions from localStorage when results are set
+  // Load resolutions from localStorage when results are set (only for new analyses, not loaded sessions)
   useEffect(() => {
-    if (feedbackItems.length === 0 || !inputText) return;
+    if (feedbackItems.length === 0 || !inputText || loadedSessionId) return;
     const key = simpleHash(inputText);
     try {
       const stored = localStorage.getItem(key);
@@ -167,7 +167,7 @@ function App() {
         setResolutions(JSON.parse(stored));
       }
     } catch (_) {}
-  }, [feedbackItems, inputText]);
+  }, [feedbackItems, inputText, loadedSessionId]);
 
   // Save resolutions to localStorage when they change
   useEffect(() => {
@@ -280,6 +280,7 @@ function App() {
     setResolutions({});
     setShowResolved(false);
     setDocumentPositions({});
+    setRetryStatus(null);
     ForgeAgents.resetUsage();
 
     const startTime = Date.now();
@@ -329,7 +330,7 @@ function App() {
       setPhase('phase2');
       setRetryStatus(null);
 
-      const onRetryCallback = (info) => setRetryStatus(info);
+      const onRetryCallback = (info) => setRetryStatus(info); // null = success, object = retrying
 
       let aggregated;
       try {
@@ -829,12 +830,12 @@ function HistoryList({ historyIndex, onLoadSession, onDeleteSession }) {
 
 function ToggleOption({ checked, onChange, label, subtitle }) {
   return (
-    <label className="toggle-option">
+    <label className="toggle-option" onClick={onChange}>
       <div className="toggle-option-text">
         <span className="toggle-option-label">{label}</span>
         <span className="toggle-option-subtitle">{subtitle}</span>
       </div>
-      <div className={`toggle-switch ${checked ? 'active' : ''}`} onClick={onChange}>
+      <div className={`toggle-switch ${checked ? 'active' : ''}`}>
         <div className="toggle-knob" />
       </div>
     </label>

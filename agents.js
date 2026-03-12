@@ -750,8 +750,8 @@ Return ONLY the JSON array.';
       var errMsg = (errBody.error && errBody.error.message) || ('API error: ' + response.status);
 
       if ((response.status >= 500 || response.status === 429) && attempt < CONFIG.maxRetries) {
-        // On 429, read retry-after header for precise wait time
-        var waitMs = CONFIG.retryDelay;
+        // Use retry-after header for 429, or exponential backoff for both 429 and 5xx
+        var waitMs = Math.min(CONFIG.retryDelay * Math.pow(2, attempt), 60000);
         if (response.status === 429) {
           var retryAfter = response.headers.get('retry-after');
           if (retryAfter) {
@@ -760,12 +760,8 @@ Return ONLY the JSON array.';
               waitMs = Math.ceil(retrySeconds * 1000) + 500; // add 500ms buffer
             }
           }
-          // If no retry-after header, use exponential backoff capped at 60s
-          if (!retryAfter) {
-            waitMs = Math.min(CONFIG.retryDelay * Math.pow(2, attempt), 60000);
-          }
-          console.log('Forge: Rate limited (attempt ' + (attempt + 1) + '/' + CONFIG.maxRetries + '), waiting ' + Math.round(waitMs / 1000) + 's...');
         }
+        console.log('Forge: ' + (response.status === 429 ? 'Rate limited' : 'Server error ' + response.status) + ' (attempt ' + (attempt + 1) + '/' + CONFIG.maxRetries + '), waiting ' + Math.round(waitMs / 1000) + 's...');
         if (onRetry) onRetry({ attempt: attempt + 1, max: CONFIG.maxRetries, waitMs: waitMs, type: response.status === 429 ? 'rate_limit' : 'server_error' });
         await delay(waitMs);
         return callClaudeRaw(connConfig, body, attempt + 1, onRetry);
@@ -803,6 +799,8 @@ Return ONLY the JSON array.';
 
     var onRetry = (options && options.onRetry) || null;
     var data = await callClaudeRaw(connConfig, body, 0, onRetry);
+    // Clear retry status on success
+    if (onRetry) onRetry(null);
     return { text: extractTextFromResponse(data), usage: data.usage };
   }
 
@@ -836,6 +834,14 @@ Return ONLY the JSON array.';
     });
 
     subAgentCount++;
+    // Count web searches performed by sub-agent
+    if (data.content) {
+      data.content.forEach(function (block) {
+        if (block.type === 'server_tool_use' && block.name === 'web_search') {
+          webSearchCount++;
+        }
+      });
+    }
     return extractTextFromResponse(data);
   }
 
@@ -942,22 +948,29 @@ Return ONLY the JSON array.';
 
   function parseJSON(text) {
     if (!text) return [];
-    try { return JSON.parse(text); } catch (_) {}
+
+    function ensureArray(val) {
+      if (Array.isArray(val)) return val;
+      if (val && typeof val === 'object') return [val]; // wrap single object in array
+      return [];
+    }
+
+    try { return ensureArray(JSON.parse(text)); } catch (_) {}
 
     var jsonBlock = text.match(/```json\s*([\s\S]*?)\s*```/);
     if (jsonBlock) {
-      try { return JSON.parse(jsonBlock[1]); } catch (_) {}
+      try { return ensureArray(JSON.parse(jsonBlock[1])); } catch (_) {}
     }
 
     var codeBlock = text.match(/```\s*([\s\S]*?)\s*```/);
     if (codeBlock) {
-      try { return JSON.parse(codeBlock[1]); } catch (_) {}
+      try { return ensureArray(JSON.parse(codeBlock[1])); } catch (_) {}
     }
 
     var first = text.indexOf('[');
     var last = text.lastIndexOf(']');
     if (first !== -1 && last !== -1 && last > first) {
-      try { return JSON.parse(text.substring(first, last + 1)); } catch (_) {}
+      try { return ensureArray(JSON.parse(text.substring(first, last + 1))); } catch (_) {}
     }
 
     console.warn('Forge: Failed to parse JSON from agent response:', text.substring(0, 300));
